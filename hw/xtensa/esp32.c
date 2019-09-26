@@ -19,7 +19,7 @@
 #include "target/xtensa/cpu.h"
 #include "hw/misc/esp32_reg.h"
 #include "hw/char/esp32_uart.h"
-#include "hw/misc/esp32_gpio.h"
+#include "hw/gpio/esp32_gpio.h"
 #include "hw/misc/esp32_dport.h"
 #include "hw/misc/esp32_rtc_cntl.h"
 #include "hw/misc/esp32_rng.h"

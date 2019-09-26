@@ -17,7 +17,7 @@
 #include "hw/registerfields.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
-#include "hw/misc/esp32_gpio.h"
+#include "hw/gpio/esp32_gpio.h"
 
 
 
