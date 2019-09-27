@@ -60,6 +60,8 @@ blobs = [
   'efi-virtio.rom',
   'efi-e1000e.rom',
   'efi-vmxnet3.rom',
+  'esp32-v3-rom.bin',
+  'esp32-v3-rom-app.bin',
   'qemu-nsis.bmp',
   'multiboot.bin',
   'multiboot_dma.bin',
