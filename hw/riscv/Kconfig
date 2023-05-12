@@ -111,3 +111,12 @@ config SPIKE
     select HTIF
     select RISCV_ACLINT
     select SIFIVE_PLIC
+
+config RISCV_ESP32C3
+    bool
+    default y
+    depends on RISCV32
+    select OPENCORES_ETH
+    select UNIMP
+    select ESP_RGB
+

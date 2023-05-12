@@ -12,7 +12,8 @@ riscv_ss.add(when: 'CONFIG_MICROCHIP_PFSOC', if_true: files('microchip_pfsoc.c')
 riscv_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
 riscv_ss.add(when: 'CONFIG_RISCV_ESP32C3', if_true: files(
         'esp32c3_clk.c',
-        'esp32c3_intmatrix.c'
+        'esp32c3_intmatrix.c',
+        'esp32c3.c',
 ))
 riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files('riscv-iommu.c', 'riscv-iommu-pci.c'))
 
