@@ -152,6 +152,7 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C3', if_true: files(
   'esp32c3_cache.c',
   'esp_sha.c',
   'esp32c3_sha.c',
+  'esp32c3_jtag.c',
 ))
 if gcrypt.found()
   system_ss.add(when: [gcrypt, 'CONFIG_XTENSA_ESP32'], if_true: files(
