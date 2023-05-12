@@ -33,6 +33,8 @@ system_ss.add(when: 'CONFIG_XILINX', if_true: files('xilinx_timer.c'))
 system_ss.add(when: 'CONFIG_XTENSA_ESP32', if_true: files('esp32_frc_timer.c', 'esp32_timg.c'))
 system_ss.add(when: 'CONFIG_RISCV_ESP32C3', if_true: files(
     'esp32c3_timg.c',
+    'esp_systimer.c',
+    'esp32c3_systimer.c'
 ))
 ))
 specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
