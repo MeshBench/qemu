@@ -140,3 +140,6 @@ config XLNX_DISPLAYPORT
 
 config DM163
     bool
+
+config ESP_RGB
+    bool
