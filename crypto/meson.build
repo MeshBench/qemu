@@ -82,3 +82,4 @@ else
   util_ss.add(files('random-platform.c'))
 endif
 
+util_ss.add(files('xts.c'))
