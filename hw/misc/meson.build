@@ -165,6 +165,7 @@ system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
   'esp32s3_sha.c',
   'esp32c3_jtag.c',
   'esp32s3_rtc_cntl.c',
+  'esp32s3_rng.c',
 ))
 
 if gcrypt.found()
