@@ -9,7 +9,8 @@ xtensa_ss.add(when: 'CONFIG_XTENSA_VIRT', if_true: files('virt.c'))
 xtensa_ss.add(when: 'CONFIG_XTENSA_XTFPGA', if_true: files('xtfpga.c'))
 xtensa_ss.add(when: 'CONFIG_XTENSA_ESP32', if_true: files('esp32.c', 'esp32_intc.c'))
 xtensa_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
-  'esp32s3_clk.c'
+  'esp32s3_clk.c',
+  'esp32s3_intc.c',
 ))
 
 hw_arch += {'xtensa': xtensa_ss}
