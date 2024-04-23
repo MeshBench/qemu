@@ -187,6 +187,8 @@ if gcrypt.found()
   system_ss.add(when: [gcrypt, 'CONFIG_XTENSA_ESP32S3'], if_true: files(
     'esp_aes.c',
     'esp32s3_aes.c',
+    'esp_rsa.c',
+    'esp32s3_rsa.c',
   ))
 endif
 
