@@ -36,6 +36,8 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C3', if_true: files(
     'esp_systimer.c',
     'esp32c3_systimer.c'
 ))
+system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
+    'esp32c3_timg.c',
 ))
 specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
 system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
