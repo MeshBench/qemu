@@ -191,6 +191,7 @@ if gcrypt.found()
     'esp32s3_rsa.c',
     'esp_ds.c',
     'esp32s3_ds.c',
+    'esp32s3_xts_aes.c'
   ))
 endif
 
