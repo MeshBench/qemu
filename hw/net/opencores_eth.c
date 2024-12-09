@@ -141,8 +141,11 @@ static void mii_write_host(Mii *s, unsigned idx, uint16_t v)
 
 static uint16_t mii_read_host(Mii *s, unsigned idx)
 {
-    trace_open_eth_mii_read(idx, s->regs[idx]);
-    return s->regs[idx];
+    if (idx < MII_REG_MAX) {
+        trace_open_eth_mii_read(idx, s->regs[idx]);
+        return s->regs[idx];
+    }
+    return 0;
 }
 
 /* OpenCores Ethernet registers */
@@ -355,6 +358,14 @@ static void open_eth_reset(void *opaque)
     s->regs[COLLCONF] = 0xf003f;
     s->regs[TX_BD_NUM] = 0x40;
     s->regs[MIIMODER] = 0x64;
+
+    uint8_t *mac_addr = s->conf.macaddr.a;
+    SET_REGFIELD(s, MAC_ADDR1, BYTE0, mac_addr[0]);
+    SET_REGFIELD(s, MAC_ADDR1, BYTE1, mac_addr[1]);
+    SET_REGFIELD(s, MAC_ADDR0, BYTE2, mac_addr[2]);
+    SET_REGFIELD(s, MAC_ADDR0, BYTE3, mac_addr[3]);
+    SET_REGFIELD(s, MAC_ADDR0, BYTE4, mac_addr[4]);
+    SET_REGFIELD(s, MAC_ADDR0, BYTE5, mac_addr[5]);
 
     s->tx_desc = 0;
     s->rx_desc = 0x40;
@@ -744,9 +755,13 @@ static void sysbus_open_eth_realize(DeviceState *dev, Error **errp)
 
     sysbus_init_irq(sbd, &s->irq);
 
+    qemu_macaddr_default_if_unset(&s->conf.macaddr);
+
     s->nic = qemu_new_nic(&net_open_eth_info, &s->conf,
                           object_get_typename(OBJECT(s)), dev->id,
                           &dev->mem_reentrancy_guard, s);
+
+    qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 }
 
 static void qdev_open_eth_reset(DeviceState *dev)
