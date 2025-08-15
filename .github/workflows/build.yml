@@ -220,10 +220,16 @@ jobs:
           ls -l
           DIST_FILE_LIST=$(find . -name file_\* -exec cat {} \+)
           DIST_FILE_LIST="${DIST_FILE_LIST} ${RELEASE_SRC_FILE}"
+          RELEASE_CHECKSUM_FILE=$(realpath "${RELEASE_CHECKSUM_FILE}")
           for n in $DIST_FILE_LIST; do
-            sz=$(stat -c%s "${n}")
-            printf "# %s: %s bytes\n" "${n}" "${sz}" >> "${RELEASE_CHECKSUM_FILE}"
-            sha256sum -b "${n}" >> "${RELEASE_CHECKSUM_FILE}"
+            # Release archives might be in subdirectories, but we need just the file names in the checksum file
+            n_dir=$(dirname "${n}")
+            n_file=$(basename "${n}")
+            pushd "${n_dir}" > /dev/null
+            sz=$(stat -c%s "${n_file}")
+            printf "# %s: %s bytes\n" "${n_file}" "${sz}" >> "${RELEASE_CHECKSUM_FILE}"
+            sha256sum -b "${n_file}" >> "${RELEASE_CHECKSUM_FILE}"
+            popd > /dev/null
           done
           DIST_FILE_LIST="${DIST_FILE_LIST} ${RELEASE_CHECKSUM_FILE}"
           # remove new lines from file list
