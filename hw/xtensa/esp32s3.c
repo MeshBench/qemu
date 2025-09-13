@@ -31,6 +31,7 @@
 #include "hw/misc/esp32s3_rtc_cntl.h"
 #include "hw/xtensa/esp32s3_intc.h"
 
+#include "hw/sd/dwc_sdmmc.h"
 #include "hw/misc/ssi_psram.h"
 #include "core-esp32s3/core-isa.h"
 #include "qemu/datadir.h"
@@ -151,6 +152,7 @@ typedef struct Esp32s3SocState {
     ESPRgbState rgb;
 
     MemoryRegion iomem;
+    DWCSDMMCState sdmmc;
     DeviceState *eth;
     SsiPsramState *psram;
 
@@ -295,6 +297,22 @@ static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes
                                 qdev_get_gpio_in_named(psram, SSI_GPIO_CS, 0));
 }
 
+static void esp32s3_machine_init_sd(Esp32s3SocState* ss)
+{
+    DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
+    if (dinfo) {
+        DeviceState *card;
+
+        card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        /* See the comment on not using sysbus-default in esp32_machine_init_i2c */
+        DeviceState *sdmmc = DEVICE(&ss->sdmmc);
+        SDBus* sd_bus = SD_BUS(qdev_get_child_bus(sdmmc, "sd-bus"));
+        qdev_realize_and_unref(card, BUS(sd_bus), &error_fatal);
+    }
+}
+
 struct Esp32s3MachineState {
     MachineState parent;
 
@@ -407,6 +425,10 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
                            qdev_get_gpio_in(intmatrix_dev, ETS_UART0_INTR_SOURCE + i));
     }
 
+    qdev_realize(DEVICE(&s->sdmmc), &s->periph_bus, &error_fatal);
+    esp32s3_soc_add_periph_device(sys_mem, &s->sdmmc, DR_REG_SDMMC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdmmc), 0,
+                       qdev_get_gpio_in(intmatrix_dev, ETS_SDIO_HOST_INTR_SOURCE));
 
     /* Emulation of APB_CTRL_DATE_REG, needed for ECO3 revision detection.
      * This is a small hack to avoid creating a whole new device just to emulate one
@@ -527,6 +549,8 @@ static void esp32s3_soc_init(Object *obj)
     qdev_init_gpio_in_named(DEVICE(s), esp32s3_clk_update, ESP32S3_RTC_CLK_UPDATE_GPIO, 1);
 
     object_initialize_child(obj, "twai", &s->twai, TYPE_ESP32S3_TWAI);
+
+    object_initialize_child(obj, "sdmmc", &s->sdmmc, TYPE_DWC_SDMMC);
 }
 
 static Property esp32s3_soc_properties[] = {
@@ -847,6 +871,9 @@ static void esp32s3_machine_init(MachineState *machine)
 
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
+
+    
+    esp32s3_machine_init_sd(ss);
 
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
