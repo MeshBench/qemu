@@ -81,13 +81,13 @@ jobs:
             run_configure: "./.github/workflows/scripts/configure-win.sh"
 
           - platform: x86_64-apple-darwin
-            runs_on: macos-13
+            runs_on: macos-14
             shell: bash -e {0}
             run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
 
           - platform: aarch64-apple-darwin
-            runs_on: macos-13-xlarge
+            runs_on: macos-14-xlarge
             shell: bash -e {0}
             run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
@@ -137,6 +137,11 @@ jobs:
       - name: Build (${{ matrix.target }} @ ${{ matrix.platform }})
         run: |
           ninja -C build install
+
+      - name: Bundle Windows DLLs (${{ matrix.target }} @ ${{ matrix.platform }})
+        if : ${{ matrix.platform == 'x86_64-w64-mingw32' }}
+        run: |
+          ./.github/workflows/scripts/bundle-win-dlls.sh install/qemu/bin
 
       - name: Package (${{ matrix.target }} @ ${{ matrix.platform }})
         env:
