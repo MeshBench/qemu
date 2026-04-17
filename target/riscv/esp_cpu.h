@@ -42,15 +42,6 @@ typedef struct {
 } ESPCPUCycleCounter;
 
 /**
- * @brief Callback type called when MIE status bit is re-enabled
- *
- * @param Opaque context given when registering the callback
- *
- * @returns true if any interrupt is pending, false is no interrupt is pending
- */
-typedef bool (*EspIntEnableCallback)(void*);
-
-/**
  * Espressif's RISC-V core is different from standard RISC-V because of the way interrupts are handled.
  * Extend the standard RISC-V core implementation.
  */
@@ -62,21 +53,13 @@ typedef struct EspRISCVCPU {
     ESPCPUCycleCounter cc_user;
     ESPCPUCycleCounter cc_machine;
 
-    /* Callback called when the interrupts are re-enabled */
-    EspIntEnableCallback mie_enabled_callback;
-    void* mie_enabled_opaque;
-
     /*< public >*/
     /* The parent object already has a reset vector property */
     uint32_t hartid_base;
     /* Parent IRQ_M line */
     qemu_irq parent_irq;
-    /* Number of the IRQ that triggered the interrupt */
-    uint32_t irq_cause;
-    /* Interrupts are not always synchronous, so MIE may still be set to 1 while an
-     * interrupt is waiting to be handled. So, keep a mirrored MIE to mark whether
-     * we can receive interrupts or not. */
-    bool irq_pending;
+    /* Bitmap of interrupt matrix output lines currently asserted on CPU inputs. */
+    uint32_t irq_lines;
 } EspRISCVCPU;
 
 
@@ -87,14 +70,4 @@ typedef struct EspRISCVCPUClass {
     DeviceReset parent_reset;
     bool (*parent_exec_interrupt)(CPUState *cpu, int interrupt_request);
 
-    /*< public >*/
-    void (*esp_cpu_register_mie_callback)(EspRISCVCPU *env, EspIntEnableCallback callback, void* opaque);
 } EspRISCVCPUClass;
-
-/**
- * @brief Check whether the current CPU state can accept interrupts or not.
- * If an interrupt is currently pending and the MEPC was not set to the reset vector yet,
- * this function returns false.
- * If MIE bit is not set in the MSTATUS register, it will also return false.
- */
-bool esp_cpu_accept_interrupts(EspRISCVCPU *cpu);

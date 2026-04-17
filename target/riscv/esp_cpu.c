@@ -123,13 +123,6 @@ static RISCVException esp_cpu_csr_write(CPURISCVState *env, int csrno, target_ul
 }
 
 
-static void esp_cpu_register_mie_callback(EspRISCVCPU *env, EspIntEnableCallback callback, void* opaque)
-{
-    assert(env != NULL);
-    env->mie_enabled_callback = callback;
-    env->mie_enabled_opaque = opaque;
-}
-
 riscv_csr_operations esp_cpu_csr_ops = {
     .predicate = esp_cpu_csr_predicate,
     .read = esp_cpu_csr_read,
@@ -137,18 +130,14 @@ riscv_csr_operations esp_cpu_csr_ops = {
 };
 
 
-/**
- * Checks whether the CPU can accepts interrupts or not
- */
-bool esp_cpu_accept_interrupts(EspRISCVCPU *cpu)
+static void esp_cpu_update_parent_irq(EspRISCVCPU *cpu)
 {
-    /* Get the MIE bit out of the MSTATUS register */
-    CPURISCVState *env = &cpu->parent_obj.env;
-    const bool mie = (riscv_csr_read(env, CSR_MSTATUS) & MSTATUS_MIE) != 0;
-
-    return !cpu->irq_pending && mie;
+    if (cpu->irq_lines != 0) {
+        qemu_irq_raise(cpu->parent_irq);
+    } else {
+        qemu_irq_lower(cpu->parent_irq);
+    }
 }
-
 
 /**
  * Function called when an interrupt is incoming.
@@ -157,14 +146,33 @@ static void esp_cpu_irq_handler(void *opaque, int n, int level)
 {
     EspRISCVCPU *cpu = (EspRISCVCPU*) opaque;
 
-    /* Interrupt incoming if level is not 0, make sure we can receive interrupts */
-    if (level && esp_cpu_accept_interrupts(cpu)) {
-        cpu->irq_pending = true;
-        cpu->irq_cause = n;
-        qemu_irq_raise(cpu->parent_irq);
+    /* Lines go from 1 to 31 included */
+    assert(n <= ESP_CPU_INT_LINES);
+
+    if (n == 0) {
+        return;
     }
+
+    if (level != 0) {
+        SET_BIT(cpu->irq_lines, n);
+    } else {
+        CLEAR_BIT(cpu->irq_lines, n);
+    }
+
+    esp_cpu_update_parent_irq(cpu);
 }
 
+
+static uint32_t esp_cpu_select_irq_cause(EspRISCVCPU *cpu)
+{
+    for (uint32_t i = 1; i <= ESP_CPU_INT_LINES; i++) {
+        if (BIT_SET(cpu->irq_lines, i)) {
+            return i;
+        }
+    }
+
+    return 0;
+}
 
 /**
  * TCG operation called when the CPU has to actually jump to the interrupt handler.
@@ -176,30 +184,10 @@ static bool esp_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
      * replace the most important part for us: the mcause. */
     EspRISCVCPU *cpu = ESP_CPU(cs);
     EspRISCVCPUClass *klass = ESP_CPU_GET_CLASS(cpu);
+    const uint32_t cause = esp_cpu_select_irq_cause(cpu);
 
-    if (!cpu->irq_pending) {
-        /* We arrive here after servicing an interrupt but haven't de-asserted the parent IRQ.
-         * If the CPU can now accept interrupts, invoke the callback that will check for the next
-         * interrupt. */
-        if (esp_cpu_accept_interrupts(cpu)) {
-            /* Mark whether we have interrupts pending or not */
-            bool pending = false;
-
-            if (cpu->mie_enabled_callback) {
-                /* If the callback schedules a new interrupt, `cpu->irq_pending` will be set after */
-                pending = cpu->mie_enabled_callback(cpu->mie_enabled_opaque);
-            }
-
-            /* If no further interrupt was scheduled OR no further interrupts are pending, lower the parent's IRQ */
-            if (!pending && !cpu->irq_pending) {
-                qemu_irq_lower(cpu->parent_irq);
-            }
-        }
-        /* If the CPU still doesn't accept interrupts or the callback invoked didn't schedule a new interrupt,
-         * return false to mark the absence of interrupt. */
-        if (!cpu->irq_pending) {
-            return false;
-        }
+    if (cause == 0) {
+        return false;
     }
 
     const bool accepted = klass->parent_exec_interrupt(cs, interrupt_request);
@@ -207,10 +195,6 @@ static bool esp_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     if (accepted) {
         CPURISCVState *env = &cpu->parent_obj.env;
         const bool vectored = (env->mtvec & 3) == 1;
-        const uint32_t cause = cpu->irq_cause;
-
-        /* IRQ has been acknowledged by the parent CPU, it is not pending anymore */
-        cpu->irq_pending = false;
 
         /* Update the mcause and the relevant PC */
         env->mcause = RISCV_EXCP_INT_FLAG | cause;
@@ -219,6 +203,7 @@ static bool esp_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         env->pc = (env->mtvec >> 2 << 2) + (vectored ? cause * 4 : 0);
     }
 
+    /* Similarly, make sure the parent IRQ reflects the current state */
     return accepted;
 }
 
@@ -234,7 +219,7 @@ static void set_misa(CPURISCVState *env, RISCVMXL mxl, uint32_t ext)
 static void esp_cpu_reset(void *opaque)
 {
     EspRISCVCPU *cpu = opaque;
-    cpu->irq_pending = 0;
+    cpu->irq_lines = 0;
     qemu_irq_lower(cpu->parent_irq);
     cpu_reset(CPU(cpu));
 }
@@ -343,9 +328,6 @@ static void esp_cpu_class_init(ObjectClass *klass, void *data)
     /* Save the parent realize function in order to be able to call it later */
     device_class_set_parent_realize(dc, esp_cpu_realize,
                                     &cpuclass->parent_realize);
-
-    /* Function to register MIE callback */
-    cpuclass->esp_cpu_register_mie_callback = esp_cpu_register_mie_callback;
 }
 
 static const TypeInfo esp_cpu_info = {

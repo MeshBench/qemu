@@ -75,8 +75,6 @@ typedef struct ESP32C3IntMatrixState {
     uint8_t irq_prio[ESP32C3_CPU_INT_COUNT + 1];
     /* Current priority threshold of the CPU interrupts */
     uint8_t irq_thres;
-    /* Keep a bitmap of the pending interrupts */
-    uint64_t irq_pending;
     /* Bitmap that records the enabled/disabled interrupts */
     uint64_t irq_enabled;
     /* Bitmap that records the type of trigger for interrupts */
