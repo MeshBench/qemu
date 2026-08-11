@@ -461,6 +461,7 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
         qdev_realize(DEVICE(&s->spi[i]), &s->periph_bus, &error_fatal);
 
         esp32_soc_add_periph_device(sys_mem, &s->spi[i], spi_base[i]);
+        fprintf(stderr, "MSIM spi[%d] = %p base 0x%08x\n", i, (void *)&s->spi[i], (unsigned)spi_base[i]);
 
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi[i]), 0,
                            qdev_get_gpio_in(intmatrix_dev, ETS_SPI0_INTR_SOURCE + i));
@@ -693,6 +694,12 @@ static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
 struct Esp32MachineState {
     MachineState parent;
 
+    /* The LoRa radio, when one was asked for: the socket of the model that
+     * answers its SPI, and where on the bus it sits. */
+    char *radio_path;
+    uint32_t radio_spi;
+    uint32_t radio_cs;
+
     Esp32SocState esp32;
     DeviceState *flash_dev;
 };
@@ -700,6 +707,39 @@ struct Esp32MachineState {
 
 OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
 
+
+/* The LoRa radio, when the machine was given a model to talk to.
+ *
+ * MeshCore's radio_init() drives an SX1262 over SPI and RadioLib spins waiting
+ * for it; with nothing there the ESP32 task watchdog resets the board, which is
+ * where the emulated backend used to stop. The chip itself is modelled in
+ * MeshBench, so this only has to put a peripheral on the right bus and chip
+ * select and hand it the socket.
+ *
+ * Default index 3 is VSPI, which is Arduino's default SPI object on ESP32 and
+ * therefore what std_init(NULL) selects. Boards that route the radio elsewhere
+ * override it with -machine radio-spi=N.
+ */
+static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
+                                     unsigned spi_index, unsigned cs)
+{
+    if (spi_index >= ESP32_SPI_COUNT) {
+        error_report("radio-spi=%u out of range, ESP32 has %d SPI controllers",
+                     spi_index, ESP32_SPI_COUNT);
+        return;
+    }
+
+    DeviceState *spi_master = DEVICE(&ss->spi[spi_index]);
+    BusState *spi_bus = qdev_get_child_bus(spi_master, "spi");
+    DeviceState *radio = qdev_new("sx1262");
+
+    qdev_prop_set_string(radio, "path", path);
+    qdev_prop_set_uint8(radio, "cs", cs);
+    qdev_realize_and_unref(radio, spi_bus, &error_fatal);
+    /* No chip-select wiring: RadioLib drives NSS as an ordinary GPIO, so the
+     * controller never asserts its own, and the device takes every byte on the
+     * bus instead. It therefore has no CS input to connect. */
+}
 
 static void esp32_machine_init_spi_flash(Esp32SocState *ss, BlockBackend* blk)
 {
@@ -822,6 +862,14 @@ static void esp32_machine_init(MachineState *machine)
         esp32_machine_init_spi_flash(ss, blk);
     }
 
+    {
+        Esp32MachineState *mach = ESP32_MACHINE(OBJECT(machine));
+        if (mach->radio_path) {
+            esp32_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
+                                     mach->radio_cs);
+        }
+    }
+
     if (machine->ram_size > 0) {
         esp32_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
     }
@@ -933,10 +981,43 @@ static void esp32_machine_class_init(ObjectClass *oc, void *data)
     mc->fixup_ram_size = esp32_fixup_ram_size;
 }
 
+static char *esp32_get_radio_path(Object *obj, Error **errp)
+{
+    return g_strdup(ESP32_MACHINE(obj)->radio_path);
+}
+
+static void esp32_set_radio_path(Object *obj, const char *value, Error **errp)
+{
+    Esp32MachineState *ms = ESP32_MACHINE(obj);
+    g_free(ms->radio_path);
+    ms->radio_path = g_strdup(value);
+}
+
+static void esp32_machine_instance_init(Object *obj)
+{
+    Esp32MachineState *ms = ESP32_MACHINE(obj);
+
+    ms->radio_spi = 3;   /* VSPI, Arduino's default SPI on ESP32 */
+    ms->radio_cs = 0;
+    object_property_add_str(obj, "radio-path",
+                            esp32_get_radio_path, esp32_set_radio_path);
+    object_property_set_description(obj, "radio-path",
+        "unix socket of the SX1262 model to attach to the SPI bus");
+    object_property_add_uint32_ptr(obj, "radio-spi", &ms->radio_spi,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-spi",
+        "which SPI controller the radio is on (default 3, VSPI)");
+    object_property_add_uint32_ptr(obj, "radio-cs", &ms->radio_cs,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-cs",
+        "chip select the radio answers on (default 0)");
+}
+
 static const TypeInfo esp32_info = {
     .name = TYPE_ESP32_MACHINE,
     .parent = TYPE_MACHINE,
     .instance_size = sizeof(Esp32MachineState),
+    .instance_init = esp32_machine_instance_init,
     .class_init = esp32_machine_class_init,
 };
 
