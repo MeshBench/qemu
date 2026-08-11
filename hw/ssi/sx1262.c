@@ -23,6 +23,7 @@
 #include "qapi/error.h"
 #include "hw/ssi/ssi.h"
 #include "hw/qdev-properties.h"
+#include "hw/irq.h"
 #include "migration/vmstate.h"
 #include "io/channel-socket.h"
 
@@ -52,6 +53,10 @@ struct SX1262State {
     /* Reported once. A radio that is not there is a configuration mistake and
      * should say so on the console rather than by hanging the guest. */
     bool warned;
+
+    /* NSS in, BUSY out. Both are ordinary GPIOs on these boards rather than
+     * the SPI controller's own lines, so the board wires them pin to pin. */
+    qemu_irq busy_out;
 };
 
 static bool sx1262_rpc(SX1262State *s, const uint8_t *req, size_t req_len,
@@ -87,31 +92,21 @@ fail:
     return false;
 }
 
-static int sx1262_set_cs(SSIPeripheral *dev, bool select)
+/* The driver toggling the chip select by hand. This is what frames a command:
+ * the controller clocks bytes one transfer at a time, so without these edges
+ * the model has no way to tell where one command ends and the next begins. */
+static void sx1262_nss(void *opaque, int n, int level)
 {
-    SX1262State *s = SX1262(dev);
-    /* QEMU calls this with select=true meaning *asserted*; the SX1262's NSS is
-     * active low, and the controller model has already applied that. */
-    uint8_t req = select ? RADIO_CS_ASSERT : RADIO_CS_RELEASE;
+    SX1262State *s = SX1262(opaque);
+    uint8_t req = level ? RADIO_CS_RELEASE : RADIO_CS_ASSERT;   /* active low */
 
-    s->cs_active = select;
+    if (s->cs_active == !level) {
+        return;
+    }
+    s->cs_active = !level;
     sx1262_rpc(s, &req, 1, NULL, 0);
-    return 0;
 }
 
-/* Every byte on the bus, selected or not.
- *
- * RadioLib drives NSS as an ordinary GPIO (Module(P_LORA_NSS=18, ...)), so the
- * ESP32 SPI controller never asserts its own chip select and this device would
- * otherwise never be handed a byte. Taking transfer_raw sidesteps qdev CS
- * entirely, which is correct while the radio is the only peripheral on this
- * controller.
- *
- * The cost is transaction framing: without a CS edge there is nothing to say
- * where one command ends and the next begins. Real framing needs the GPIO
- * controller to expose its output lines so NSS can drive set_cs properly, which
- * is the same change the board LEDs need.
- */
 static uint32_t sx1262_transfer(SSIPeripheral *dev, uint32_t val)
 {
     SX1262State *s = SX1262(dev);
@@ -152,6 +147,11 @@ static void sx1262_realize(SSIPeripheral *dev, Error **errp)
      * emulated node in step with the engine rather than racing it. */
     qio_channel_set_blocking(QIO_CHANNEL(s->sock), true, NULL);
     s->connected = true;
+
+    qdev_init_gpio_in_named(DEVICE(dev), sx1262_nss, "sx1262-nss", 1);
+    qdev_init_gpio_out_named(DEVICE(dev), &s->busy_out, "sx1262-busy", 1);
+    /* Not busy until the model says otherwise. */
+    qemu_set_irq(s->busy_out, 0);
 }
 
 static const VMStateDescription vmstate_sx1262 = {
@@ -167,6 +167,7 @@ static const VMStateDescription vmstate_sx1262 = {
 
 static Property sx1262_properties[] = {
     DEFINE_PROP_STRING("path", SX1262State, path),
+    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void sx1262_class_init(ObjectClass *klass, void *data)
@@ -175,9 +176,10 @@ static void sx1262_class_init(ObjectClass *klass, void *data)
     SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
 
     k->realize = sx1262_realize;
+    /* transfer_raw, not transfer: the chip select arrives on a GPIO line
+     * rather than through the SSI bus, so qdev would never select this
+     * device. Framing comes from the NSS handler above instead. */
     k->transfer_raw = sx1262_transfer;
-    k->set_cs = sx1262_set_cs;
-    k->cs_polarity = SSI_CS_LOW;
 
     dc->desc = "SX1262 LoRa transceiver, backed by MeshBench's radio model";
     dc->vmsd = &vmstate_sx1262;

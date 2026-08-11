@@ -24,6 +24,7 @@
 #include "hw/i2c/i2c.h"
 #include "hw/qdev-properties.h"
 #include "hw/xtensa/esp32.h"
+#include "hw/gpio/esp32_gpio.h"
 #include "hw/misc/ssi_psram.h"
 #include "hw/sd/dwc_sdmmc.h"
 #include "core-esp32/core-isa.h"
@@ -698,6 +699,8 @@ struct Esp32MachineState {
     char *radio_path;
     uint32_t radio_spi;
     uint32_t radio_cs;
+    uint32_t radio_nss;
+    uint32_t radio_busy;
 
     Esp32SocState esp32;
     DeviceState *flash_dev;
@@ -720,7 +723,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
  * override it with -machine radio-spi=N.
  */
 static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
-                                     unsigned spi_index, unsigned cs)
+                                     unsigned spi_index, unsigned cs,
+                                     unsigned nss_pin, unsigned busy_pin)
 {
     if (spi_index >= ESP32_SPI_COUNT) {
         error_report("radio-spi=%u out of range, ESP32 has %d SPI controllers",
@@ -735,9 +739,21 @@ static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
     qdev_prop_set_string(radio, "path", path);
     qdev_prop_set_uint8(radio, "cs", cs);
     qdev_realize_and_unref(radio, spi_bus, &error_fatal);
-    /* No chip-select wiring: RadioLib drives NSS as an ordinary GPIO, so the
-     * controller never asserts its own, and the device takes every byte on the
-     * bus instead. It therefore has no CS input to connect. */
+
+    /* NSS and BUSY are ordinary GPIOs on these boards, not the SPI
+     * controller's own chip select, so they are wired pin to pin.
+     *
+     * NSS is what gives the device its transaction boundaries: RadioLib holds
+     * it low across a multi-byte command while the controller clocks the bytes
+     * out one transfer at a time. Without it the device sees an unframed byte
+     * stream and cannot answer a register read. */
+    DeviceState *gpio = DEVICE(&ss->gpio);
+
+    qdev_connect_gpio_out_named(gpio, ESP32_GPIO_OUT, nss_pin,
+                                qdev_get_gpio_in_named(radio, "sx1262-nss", 0));
+    qdev_connect_gpio_out_named(radio, "sx1262-busy", 0,
+                                qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
+                                                       busy_pin));
 }
 
 static void esp32_machine_init_spi_flash(Esp32SocState *ss, BlockBackend* blk)
@@ -865,7 +881,8 @@ static void esp32_machine_init(MachineState *machine)
         Esp32MachineState *mach = ESP32_MACHINE(OBJECT(machine));
         if (mach->radio_path) {
             esp32_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
-                                     mach->radio_cs);
+                                     mach->radio_cs, mach->radio_nss,
+                                     mach->radio_busy);
         }
     }
 
@@ -998,6 +1015,8 @@ static void esp32_machine_instance_init(Object *obj)
 
     ms->radio_spi = 3;   /* VSPI, Arduino's default SPI on ESP32 */
     ms->radio_cs = 0;
+    ms->radio_nss = 18;  /* Heltec V2 and friends; per board */
+    ms->radio_busy = 35;
     object_property_add_str(obj, "radio-path",
                             esp32_get_radio_path, esp32_set_radio_path);
     object_property_set_description(obj, "radio-path",
@@ -1010,6 +1029,14 @@ static void esp32_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-cs",
         "chip select the radio answers on (default 0)");
+    object_property_add_uint32_ptr(obj, "radio-nss", &ms->radio_nss,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-nss",
+        "GPIO the driver toggles as the radio's chip select (default 18)");
+    object_property_add_uint32_ptr(obj, "radio-busy", &ms->radio_busy,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-busy",
+        "GPIO the radio drives as its BUSY line (default 35)");
 }
 
 static const TypeInfo esp32_info = {
