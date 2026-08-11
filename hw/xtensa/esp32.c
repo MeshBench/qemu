@@ -461,7 +461,6 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
         qdev_realize(DEVICE(&s->spi[i]), &s->periph_bus, &error_fatal);
 
         esp32_soc_add_periph_device(sys_mem, &s->spi[i], spi_base[i]);
-        fprintf(stderr, "MSIM spi[%d] = %p base 0x%08x\n", i, (void *)&s->spi[i], (unsigned)spi_base[i]);
 
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi[i]), 0,
                            qdev_get_gpio_in(intmatrix_dev, ETS_SPI0_INTR_SOURCE + i));
