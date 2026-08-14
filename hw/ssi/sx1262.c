@@ -48,6 +48,7 @@ enum {
     RADIO_CS_RELEASE  = 0x02,
     RADIO_XFER        = 0x03,   /* one byte out, one byte back */
     RADIO_READ_BUSY   = 0x04,   /* the BUSY line, which RadioLib spins on */
+    RADIO_SET_FEM     = 0x06,   /* front-end module enable, level in byte 2 */
 };
 
 struct SX1262State {
@@ -57,6 +58,7 @@ struct SX1262State {
     QIOChannelSocket *sock;
     bool connected;
     bool cs_active;
+    bool fem_level;
 
     /* Reported once. A radio that is not there is a configuration mistake and
      * should say so on the console rather than by hanging the guest. */
@@ -115,6 +117,23 @@ static void sx1262_nss(void *opaque, int n, int level)
     sx1262_rpc(s, &req, 1, NULL, 0);
 }
 
+/* The board's front-end module enable line: an external amplifier and antenna
+ * switch that the firmware drives as an ordinary GPIO. The radio cannot see it
+ * over SPI - the module sits beside the chip, not inside it, and the chip has
+ * no way to know whether its output reaches an antenna. But whether the line is
+ * asserted decides how much power leaves the board, so the model needs it. */
+static void sx1262_fem(void *opaque, int n, int level)
+{
+    SX1262State *s = SX1262(opaque);
+    uint8_t req[2] = { RADIO_SET_FEM, level ? 1 : 0 };
+
+    if (s->fem_level == !!level) {
+        return;
+    }
+    s->fem_level = !!level;
+    sx1262_rpc(s, req, sizeof(req), NULL, 0);
+}
+
 static uint32_t sx1262_transfer(SSIPeripheral *dev, uint32_t val)
 {
     SX1262State *s = SX1262(dev);
@@ -165,6 +184,7 @@ static void sx1262_realize(SSIPeripheral *dev, Error **errp)
     s->connected = true;
 
     qdev_init_gpio_in_named(DEVICE(dev), sx1262_nss, "sx1262-nss", 1);
+    qdev_init_gpio_in_named(DEVICE(dev), sx1262_fem, "sx1262-fem", 1);
     qdev_init_gpio_out_named(DEVICE(dev), &s->busy_out, "sx1262-busy", 1);
     /* Not busy until the model says otherwise. */
     qemu_set_irq(s->busy_out, 0);
