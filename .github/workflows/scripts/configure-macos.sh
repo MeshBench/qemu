@@ -13,15 +13,15 @@ sed -i '' "s/common_user_inc = \[\]/common_user_inc = \['include', 'build'\]/" m
 echo DBG
 ./configure --help
 
+# No SDL: MeshBench drives QEMU headless over sockets and never asks for a
+# window, but linking SDL makes the binary refuse to start at all on a
+# machine without libSDL2 - which is most machines, and exactly the
+# audience a downloadable emulator exists for.
 ./configure \
     --bindir=bin \
     --datadir=share/qemu \
     --enable-fdt=internal \
     --enable-gcrypt \
-    # No SDL. MeshBench drives QEMU headless over sockets and never asks
-    # for a window, but linking SDL makes the binary refuse to start at
-    # all on a machine without libSDL2 - which is most machines, and
-    # exactly the audience a downloadable emulator exists for.
     --disable-sdl \
     --enable-pixman \
     --enable-slirp \
