@@ -181,6 +181,44 @@ jobs:
             readelf -d install/qemu/bin/qemu-system-* | grep -i 'rpath\|runpath' || \
               echo "::warning::no rpath in the binary; it will need system libraries"
           fi
+          # macOS: the same problem as Linux, in Apple's dialect. The binary
+          # links Homebrew dylibs (/opt/homebrew/opt/pixman, libgcrypt) that
+          # exist on the machine that built it and on no user's Mac, so it
+          # aborts in dyld before main. Verified on an actual Mac, not
+          # assumed.
+          #
+          # Copy each one in, rewrite the reference to @executable_path, and
+          # follow the dylibs' own dependencies - libgcrypt pulls
+          # libgpg-error behind it. Then re-sign: install_name_tool
+          # invalidates the signature, and an unsigned binary does not run at
+          # all on Apple Silicon.
+          case "$PLATFORM" in
+            *apple-darwin)
+              mkdir -p install/qemu/lib
+              todo=$(ls install/qemu/bin/qemu-system-*)
+              while [ -n "$todo" ]; do
+                next=""
+                for f in $todo; do
+                  for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}' | grep -E '^/opt/homebrew|^/usr/local'); do
+                    base=$(basename "$dep")
+                    if [ ! -f "install/qemu/lib/$base" ]; then
+                      cp "$dep" "install/qemu/lib/$base"
+                      chmod u+w "install/qemu/lib/$base"
+                      install_name_tool -id "@executable_path/../lib/$base" "install/qemu/lib/$base"
+                      next="$next install/qemu/lib/$base"
+                    fi
+                    install_name_tool -change "$dep" "@executable_path/../lib/$base" "$f"
+                  done
+                done
+                todo="$next"
+              done
+              codesign --force --sign - install/qemu/lib/*.dylib install/qemu/bin/qemu-system-* || true
+              echo "bundled:"; ls -la install/qemu/lib
+              echo "remaining non-system references:"
+              otool -L install/qemu/bin/qemu-system-* | grep -E '/opt/homebrew|/usr/local' || echo "  none"
+              install/qemu/bin/qemu-system-* --version | head -1
+              ;;
+          esac
           find $PWD/install/qemu/share/qemu/ -maxdepth 1 -mindepth 1 -not -name 'esp*.bin' -exec rm -rfv {} \;
           export DIST_DIR=${PWD}/dist
           mkdir -p ${DIST_DIR}
