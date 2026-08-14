@@ -1,6 +1,12 @@
 name: 'build'
 
-on: [push, pull_request]
+# push and workflow_dispatch only - pull_request is deliberately gone. The
+# macOS legs run on the org's own Mac now, and a fork pull request runs the
+# PR's version of this file, which could point any job at that machine. Push
+# and dispatch need write access; nobody outside can cause either.
+on:
+  push:
+  workflow_dispatch:
 
 jobs:
 
@@ -54,7 +60,9 @@ jobs:
           - x86_64-linux-gnu
           - aarch64-linux-gnu
           - x86_64-w64-mingw32
-          - x86_64-apple-darwin
+          # x86_64-apple-darwin is deliberately absent: the only Mac is an
+          # arm64 one, and Rosetta cross-building x86_64 QEMU is not worth
+          # the runner's time until somebody on an Intel Mac asks.
           - aarch64-apple-darwin
         target: [xtensa-softmmu, riscv32-softmmu]
 
@@ -87,12 +95,9 @@ jobs:
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
 
           - platform: aarch64-apple-darwin
-            # macos-14 is already Apple Silicon, and it is free on public
-            # repositories. macos-14-xlarge is a *larger* runner, which is
-            # billed on every plan, public or not - so this leg never started
-            # and reported it as an account payment failure, which reads like
-            # a problem with the account rather than with the label.
-            runs_on: macos-14
+            # The org's own M4: faster than hosted, no queue. Safe because
+            # every event that reaches this workflow needs write access.
+            runs_on: [self-hosted, macos-m4]
             shell: bash -e {0}
             run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
