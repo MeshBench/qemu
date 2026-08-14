@@ -54,13 +54,8 @@ jobs:
           - x86_64-linux-gnu
           - aarch64-linux-gnu
           - x86_64-w64-mingw32
-          # macOS is deliberately absent until MeshBench has a self-hosted Mac
-          # runner. aarch64-apple-darwin has never built here, and hosted
-          # macOS minutes are billed at 10x on private repositories - which is
-          # what MeshBench itself is. The include: entries below are left in
-          # place so turning these back on is one line each.
-          # - x86_64-apple-darwin
-          # - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
         target: [xtensa-softmmu, riscv32-softmmu]
 
         include:
@@ -92,7 +87,12 @@ jobs:
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
 
           - platform: aarch64-apple-darwin
-            runs_on: macos-14-xlarge
+            # macos-14 is already Apple Silicon, and it is free on public
+            # repositories. macos-14-xlarge is a *larger* runner, which is
+            # billed on every plan, public or not - so this leg never started
+            # and reported it as an account payment failure, which reads like
+            # a problem with the account rather than with the label.
+            runs_on: macos-14
             shell: bash -e {0}
             run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
