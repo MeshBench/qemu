@@ -155,6 +155,29 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           TARGET: ${{ matrix.target }}
         run: |
+          # Carry the libraries QEMU needs, so the archive runs on a machine
+          # that has never built anything. Without this the binary starts and
+          # dies on libslirp/libpixman/libgcrypt - which for somebody who just
+          # downloaded MeshBench is indistinguishable from MeshBench being
+          # broken. glibc and its siblings are deliberately not copied: they
+          # are the one thing every Linux has, and shipping them fights the
+          # host loader.
+          #
+          # Native x86_64 only. The aarch64 legs cross-compile, so the host's
+          # ldd cannot resolve the guest's libraries; that archive still
+          # expects its distro to provide them.
+          if [ "$PLATFORM" = "x86_64-linux-gnu" ]; then
+            sudo apt-get install -y --no-install-recommends patchelf
+            mkdir -p install/qemu/lib
+            for so in $(ldd install/qemu/bin/qemu-system-* | awk '/=> \//{print $3}' | sort -u); do
+              case "$(basename "$so")" in
+                libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libutil.so.*|ld-linux*) ;;
+                *) cp -Lv "$so" install/qemu/lib/ ;;
+              esac
+            done
+            patchelf --set-rpath '$ORIGIN/../lib' install/qemu/bin/qemu-system-*
+            echo "bundled:"; ls -la install/qemu/lib
+          fi
           find $PWD/install/qemu/share/qemu/ -maxdepth 1 -mindepth 1 -not -name 'esp*.bin' -exec rm -rfv {} \;
           export DIST_DIR=${PWD}/dist
           mkdir -p ${DIST_DIR}
