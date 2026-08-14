@@ -180,7 +180,11 @@ jobs:
             dist/
 
   Upload:
-    if: startsWith(github.ref, 'refs/tags/')
+    # always(), because the matrix builds five platforms and a tag should
+    # still publish the ones that worked. Windows (mingw) and macOS arm64 do
+    # not build in this fork yet; waiting for them would mean never releasing
+    # the Linux and macOS x86_64 emulators that do.
+    if: always() && startsWith(github.ref, 'refs/tags/')
     needs: [ Vars, Build ]
     runs-on: ubuntu-latest
     permissions:
@@ -247,5 +251,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # Not a draft: MeshBench's packaging downloads these by pattern, and
+          # a draft is invisible to that. The tag says which fork and which
+          # change it carries.
+          draft: false
           files: upload/*
