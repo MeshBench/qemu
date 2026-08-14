@@ -8,13 +8,16 @@ VERSION=${VERSION:-dev}
 echo DBG
 ./configure --help
 
-# No -Werror here, and no SDL. -Werror fails the build on an upstream test
+# --disable-werror, and no SDL. Removing --extra-cflags=-Werror was not
+# enough: QEMU's configure turns -Werror on by itself for a git build, and
+# it fails on an upstream test
 # file (tests/qtest/libqtest.c: 'idx' set but not used) that a newer mingw
 # GCC warns about - QEMU's own tests, which this build does not run, taking
 # down the Windows emulator nobody could otherwise have. SDL would make the
 # binary need a display library it never opens.
 ./configure \
     --bindir=bin \
+    --disable-werror \
     --datadir=share/qemu \
     --enable-gcrypt \
     --disable-sdl \
