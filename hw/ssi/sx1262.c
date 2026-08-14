@@ -15,6 +15,13 @@
  * Attach it the way the board already attaches flash:
  *
  *     -device sx1262,bus=spi2,cs=0,path=/run/user/1000/meshbench-radio-7.sock
+ *     -device sx1262,bus=spi2,cs=0,path=127.0.0.1:38217
+ *
+ * The path is anything QEMU's own socket_parse() understands, so a Unix
+ * socket where there are Unix sockets and host:port everywhere else. Windows
+ * is the reason: it has no Unix socket QEMU can use, and the radio model
+ * already speaks TCP for the Renode backend, so one transport now serves all
+ * three platforms.
  */
 
 #include "qemu/osdep.h"
@@ -26,6 +33,7 @@
 #include "hw/irq.h"
 #include "migration/vmstate.h"
 #include "io/channel-socket.h"
+#include "qemu/sockets.h"
 
 #define TYPE_SX1262 "sx1262"
 OBJECT_DECLARE_SIMPLE_TYPE(SX1262State, SX1262)
@@ -126,22 +134,30 @@ static uint32_t sx1262_transfer(SSIPeripheral *dev, uint32_t val)
 static void sx1262_realize(SSIPeripheral *dev, Error **errp)
 {
     SX1262State *s = SX1262(dev);
-    SocketAddress addr = {
-        .type = SOCKET_ADDRESS_TYPE_UNIX,
-        .u.q_unix.path = s->path,
-    };
+    SocketAddress *addr;
 
     if (!s->path) {
         error_setg(errp, "sx1262: needs path= pointing at the radio model socket");
         return;
     }
 
-    s->sock = qio_channel_socket_new();
-    if (qio_channel_socket_connect_sync(s->sock, &addr, errp) < 0) {
-        error_prepend(errp, "sx1262: cannot reach the radio model at %s: ",
-                      s->path);
+    /* socket_parse() rather than a hard-coded Unix address: it takes a bare
+     * path as Unix and "host:port" as TCP, which is what lets the same device
+     * work on Windows, where there is no Unix socket to hand. */
+    addr = socket_parse(s->path, errp);
+    if (!addr) {
+        error_prepend(errp, "sx1262: cannot make sense of path=%s: ", s->path);
         return;
     }
+
+    s->sock = qio_channel_socket_new();
+    if (qio_channel_socket_connect_sync(s->sock, addr, errp) < 0) {
+        error_prepend(errp, "sx1262: cannot reach the radio model at %s: ",
+                      s->path);
+        qapi_free_SocketAddress(addr);
+        return;
+    }
+    qapi_free_SocketAddress(addr);
     /* Blocking on purpose. The guest is stopped while a transaction is in
      * flight, exactly as it would be waiting on real SPI, and it keeps the
      * emulated node in step with the engine rather than racing it. */
