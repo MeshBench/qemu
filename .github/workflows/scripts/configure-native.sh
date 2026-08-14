@@ -18,7 +18,11 @@ echo DBG
     --bindir=bin \
     --datadir=share/qemu \
     --enable-gcrypt \
-    --enable-sdl \
+    # No SDL. MeshBench drives QEMU headless over sockets and never asks
+    # for a window, but linking SDL makes the binary refuse to start at
+    # all on a machine without libSDL2 - which is most machines, and
+    # exactly the audience a downloadable emulator exists for.
+    --disable-sdl \
     --enable-pixman \
     --enable-slirp \
     --enable-stack-protector \
