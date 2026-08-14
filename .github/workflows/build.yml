@@ -4,8 +4,13 @@ name: 'build'
 # macOS legs run on the org's own Mac now, and a fork pull request runs the
 # PR's version of this file, which could point any job at that machine. Push
 # and dispatch need write access; nobody outside can cause either.
+# Tags and dispatch only - not branch pushes. A push used to build the whole
+# ten-leg matrix including the macOS leg, which now runs on the org's own Mac:
+# every workflow tweak would park a real release build behind it. Releases are
+# what this fork's CI exists for.
 on:
   push:
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
