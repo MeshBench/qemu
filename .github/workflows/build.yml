@@ -284,13 +284,18 @@ jobs:
       # containing only a source archive, and that release then shadows the
       # last good one for anybody downloading by pattern. Ask for at least
       # one platform archive before releasing anything.
-      - name: Refuse to release without binaries
+      - name: Refuse to release without the platform MeshBench needs
         run: |
           set -e
-          n=$(find upload -name '*softmmu*.tar.xz' | wc -l)
-          echo "platform archives: $n"
-          if [ "$n" -eq 0 ]; then
-            echo "::error::every build failed; not publishing a source-only release"
+          find upload -name '*.tar.xz' -printf '  %f\n' | sort
+          # "At least one archive" is not enough. A release with only the
+          # macOS builds still becomes *latest*, and MeshBench downloads the
+          # Xtensa Linux archive by pattern from whatever latest is - so a
+          # partial release silently replaces a working one with a set that
+          # does not contain the file anybody fetches. This is the file that
+          # makes a release worth publishing.
+          if ! find upload -name '*xtensa*x86_64-linux-gnu.tar.xz' | grep -q .; then
+            echo "::error::no Xtensa x86_64 Linux archive; not publishing a release that would shadow the last good one"
             exit 1
           fi
 
