@@ -248,6 +248,21 @@ jobs:
           cat "${RELEASE_CHECKSUM_FILE}"
           rm -rf -- upload && mkdir -p upload && mv -v ${DIST_FILE_LIST} upload/
 
+      # always() lets a partial matrix publish, which is the point - but a
+      # matrix where *nothing* built would otherwise publish a release
+      # containing only a source archive, and that release then shadows the
+      # last good one for anybody downloading by pattern. Ask for at least
+      # one platform archive before releasing anything.
+      - name: Refuse to release without binaries
+        run: |
+          set -e
+          n=$(find upload -name '*softmmu*.tar.xz' | wc -l)
+          echo "platform archives: $n"
+          if [ "$n" -eq 0 ]; then
+            echo "::error::every build failed; not publishing a source-only release"
+            exit 1
+          fi
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
