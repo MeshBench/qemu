@@ -23,6 +23,7 @@ echo DBG
     --datadir=share/qemu \
     --enable-gcrypt \
     --disable-sdl \
+    --extra-ldflags='-Wl,-rpath,$ORIGIN/../lib' \
     --enable-pixman \
     --enable-slirp \
     --enable-stack-protector \
