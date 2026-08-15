@@ -30,7 +30,17 @@ if [ -f "${PYFIX_FILE}" ] ; then
 fi
 
 echo "Installing meson and tomli"
-python3 -m pip install --break-system-packages --user meson==1.7.0 tomli==2.2.1
+# --break-system-packages exists to bypass PEP 668's externally-managed marker,
+# and pip only grew the option in 23.0. The Apple Silicon runner ships Xcode's
+# python3, whose pip is older than that and which sets no such marker - so the
+# flag is both unrecognised and unnecessary there. Passing it unconditionally
+# failed the aarch64-apple-darwin legs of every release before the build had
+# compiled a line.
+pipflags=(--user)
+if python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages ; then
+  pipflags+=(--break-system-packages)
+fi
+python3 -m pip install "${pipflags[@]}" meson==1.7.0 tomli==2.2.1
 
 # dbg
 command -v python3
