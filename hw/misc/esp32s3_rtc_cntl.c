@@ -177,11 +177,29 @@ static const MemoryRegionOps esp32s3_rtc_cntl_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
+/* The crystal frequency, as the firmware expects to find it.
+ *
+ * ESP-IDF keeps it in RTC_XTAL_FREQ_REG - which is STORE4 - encoded as the
+ * value in megahertz in both halves, and the bootloader writes it there after
+ * measuring the crystal against the RTC's slow clock. That measurement does not
+ * converge here, so the register stayed empty and every ESP32-S3 image asserted
+ * on the way up:
+ *
+ *     assert failed: ... rtc_clk_xtal_freq_get() == RTC_XTAL_FREQ_40M
+ *
+ * Seeded rather than measured. Every ESP32-S3 board runs a 40 MHz crystal, and
+ * a machine that cannot say so is not modelling one.
+ */
+#define ESP32S3_XTAL_FREQ_MHZ 40
+#define ESP32S3_RTC_XTAL_FREQ_STORE 4
+
 static void esp32s3_rtc_cntl_reset_hold(Object *obj, ResetType type)
 {
     Esp32s3RtcCntlState *s = ESP32S3_RTC_CNTL(obj);
 
     s->time_base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->scratch_reg[ESP32S3_RTC_XTAL_FREQ_STORE] =
+        ESP32S3_XTAL_FREQ_MHZ | (ESP32S3_XTAL_FREQ_MHZ << 16);
 }
 
 static void esp32s3_rtc_cntl_realize(DeviceState *dev, Error **errp)

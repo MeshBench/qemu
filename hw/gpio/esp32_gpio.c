@@ -81,7 +81,7 @@ static void esp32_gpio_update(Esp32GpioState *s, uint32_t old_out,
             qemu_set_irq(s->out_irq[i], level);
         }
     }
-    for (int i = 0; i < ESP32_GPIO_PIN_COUNT - ESP32_GPIO_BANK1_FIRST; i++) {
+    for (int i = 0; i < (int)s->pin_count - ESP32_GPIO_BANK1_FIRST; i++) {
         if (changed1 & (1u << i)) {
             int level = !!(s->out1 & (1u << i));
             s->in1 = (s->in1 & ~(1u << i)) | ((uint32_t)level << i);
@@ -201,10 +201,11 @@ static void esp32_gpio_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
+    s->pin_count = ESP32_GPIO_GET_CLASS(obj)->pin_count;
     qdev_init_gpio_out_named(DEVICE(obj), s->out_irq, ESP32_GPIO_OUT,
-                             ESP32_GPIO_PIN_COUNT);
+                             s->pin_count);
     qdev_init_gpio_in_named(DEVICE(obj), esp32_gpio_set_input, ESP32_GPIO_IN,
-                            ESP32_GPIO_PIN_COUNT);
+                            s->pin_count);
 }
 
 static const VMStateDescription vmstate_esp32_gpio = {
@@ -231,6 +232,7 @@ static Property esp32_gpio_properties[] = {
 
 static void esp32_gpio_class_init(ObjectClass *klass, void *data)
 {
+    ESP32_GPIO_CLASS(klass)->pin_count = ESP32_GPIO_PIN_COUNT;
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
 

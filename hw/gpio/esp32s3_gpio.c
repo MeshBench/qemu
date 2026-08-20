@@ -30,6 +30,9 @@ static void esp32s3_gpio_init(Object *obj)
  * in this class_init function */
 static void esp32s3_gpio_class_init(ObjectClass *klass, void *data)
 {
+    /* 49 GPIOs, against the ESP32's 40. Everything else - the register layout,
+     * the two banks, the propagation to wired peripherals - is the parent's. */
+    ESP32_GPIO_CLASS(klass)->pin_count = ESP32S3_GPIO_PIN_COUNT;
 }
 
 static const TypeInfo esp32s3_gpio_info = {

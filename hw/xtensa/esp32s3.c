@@ -133,6 +133,11 @@ typedef struct Esp32s3SocState {
 
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
+
+    /* GPSPI2, which the ESP32-S3 calls FSPI and Arduino calls SPI. The flash
+     * hangs off spi1; this is the general-purpose controller a board puts a
+     * radio on, and until now the machine did not have one at all. */
+    ESP32S3SpiState spi2;
     ESP32S3CacheState cache;
     ESP32S3EfuseState efuse;
     ESP32S3ClockState clock;
@@ -283,13 +288,19 @@ static void esp32s3_init_spi_flash(Esp32s3SocState *ms, BlockBackend* blk)
                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
 }
 
-static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes)
+static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes,
+                                       bool psram_octal)
 {
     /* PSRAM attached to SPI1, CS1 */
     DeviceState *spi_master = DEVICE(&ms->spi1);
     BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *psram = qdev_new(TYPE_SSI_PSRAM);
     qdev_prop_set_uint32(psram, "size_mbytes", size_mbytes);
+    /* Octal or quad is a property of the part the board carries, and the
+     * firmware probes for the one it was built against: an OPI board reads the
+     * ID with the octal command and gets zeros from a quad chip, which
+     * ESP-IDF reports as "PSRAM chip not found" and then asserts on. */
+    qdev_prop_set_bit(psram, "is_octal", psram_octal);
     qdev_prop_set_uint8(psram, "cs", 1);
     qdev_realize(psram, spi_bus, &error_fatal);
     ms->psram = SSI_PSRAM(psram);
@@ -318,8 +329,73 @@ struct Esp32s3MachineState {
 
     Esp32s3SocState esp32s3;
     DeviceState *flash_dev;
+
+    bool psram_octal;
+    char *radio_path;
+    uint32_t radio_spi;
+    uint32_t radio_cs;
+    uint32_t radio_nss;
+    uint32_t radio_busy;
+    uint32_t radio_fem;
 };
+
+/* No GPIO here, rather than pin 0, which is a real pin and would silently wire
+ * the module to whatever drives it. */
+#define ESP32S3_RADIO_PIN_NONE UINT32_MAX
 #define TYPE_ESP32S3_MACHINE MACHINE_TYPE_NAME("esp32s3")
+
+/* The LoRa radio, when the machine was given a model to talk to.
+ *
+ * The same shape as the ESP32's, and for the same reason: MeshCore's
+ * radio_init() drives an SX1262 over SPI and RadioLib spins waiting for it, so
+ * a board with nothing on the bus watchdogs itself instead of booting. The chip
+ * is modelled in MeshBench; this only has to put a peripheral on the right bus
+ * and chip select and hand it the socket.
+ *
+ * Default index 2 is GPSPI2 - FSPI on this part, and what Arduino's SPI object
+ * drives. Boards that route the radio elsewhere override it.
+ */
+static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
+                                       unsigned spi_index, unsigned cs,
+                                       unsigned nss_pin, unsigned busy_pin,
+                                       unsigned fem_pin)
+{
+    if (spi_index != 2) {
+        error_report("radio-spi=%u: only GPSPI2 carries a radio on this machine",
+                     spi_index);
+        return;
+    }
+
+    DeviceState *spi_master = DEVICE(&ss->spi2);
+    BusState *spi_bus = qdev_get_child_bus(spi_master, "spi");
+    DeviceState *radio = qdev_new("sx1262");
+
+    qdev_prop_set_string(radio, "path", path);
+    qdev_prop_set_uint8(radio, "cs", cs);
+    qdev_realize_and_unref(radio, spi_bus, &error_fatal);
+
+    /* NSS and BUSY are ordinary GPIOs on these boards, not the controller's own
+     * chip select. NSS is what gives the device its transaction boundaries:
+     * RadioLib holds it low across a multi-byte command while the controller
+     * clocks the bytes out one transfer at a time. Without it the device sees an
+     * unframed byte stream and cannot answer a register read. */
+    DeviceState *gpio = DEVICE(&ss->gpio);
+
+    qdev_connect_gpio_out_named(gpio, ESP32_GPIO_OUT, nss_pin,
+                                qdev_get_gpio_in_named(radio, "sx1262-nss", 0));
+    qdev_connect_gpio_out_named(radio, "sx1262-busy", 0,
+                                qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
+                                                       busy_pin));
+
+    /* The front-end module's transmit enable, on boards that have one. Left
+     * unwired by default because most do not, and a board with no module must
+     * not be modelled as one whose module is permanently off. */
+    if (fem_pin != ESP32S3_RADIO_PIN_NONE) {
+        qdev_connect_gpio_out_named(gpio, ESP32_GPIO_OUT, fem_pin,
+                                    qdev_get_gpio_in_named(radio,
+                                                           "sx1262-fem", 0));
+    }
+}
 
 static void esp32s3_init_openeth(Esp32s3SocState *ms)
 {
@@ -637,6 +713,7 @@ static void esp32s3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
+    object_initialize_child(OBJECT(ss), "spi2", &ss->spi2, TYPE_ESP32S3_SPI);
     object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
@@ -685,8 +762,16 @@ static void esp32s3_machine_init(MachineState *machine)
             esp32s3_init_spi_flash(ss, blk);
         }
         if (machine->ram_size > 0) {
-            esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
+            esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB),
+                                       ESP32S3_MACHINE(OBJECT(machine))->psram_octal);
         }
+    }
+
+    /* GPSPI2, the general-purpose controller a board puts a radio on. */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->spi2), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->spi2), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE, mr, 0);
     }
 
     /* (Extmem) Cache realization */
@@ -875,6 +960,15 @@ static void esp32s3_machine_init(MachineState *machine)
     
     esp32s3_machine_init_sd(ss);
 
+    {
+        Esp32s3MachineState *mach = ESP32S3_MACHINE(OBJECT(machine));
+        if (mach->radio_path) {
+            esp32s3_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
+                                       mach->radio_cs, mach->radio_nss,
+                                       mach->radio_busy, mach->radio_fem);
+        }
+    }
+
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
      */
@@ -986,10 +1080,74 @@ static void esp32s3_machine_class_init(ObjectClass *oc, void *data)
     mc->fixup_ram_size = esp32s3_fixup_ram_size;
 }
 
+static bool esp32s3_get_psram_octal(Object *obj, Error **errp)
+{
+    return ESP32S3_MACHINE(obj)->psram_octal;
+}
+
+static void esp32s3_set_psram_octal(Object *obj, bool value, Error **errp)
+{
+    ESP32S3_MACHINE(obj)->psram_octal = value;
+}
+
+static char *esp32s3_get_radio_path(Object *obj, Error **errp)
+{
+    return g_strdup(ESP32S3_MACHINE(obj)->radio_path);
+}
+
+static void esp32s3_set_radio_path(Object *obj, const char *value, Error **errp)
+{
+    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
+    g_free(ms->radio_path);
+    ms->radio_path = g_strdup(value);
+}
+
+static void esp32s3_machine_instance_init(Object *obj)
+{
+    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
+
+    ms->radio_spi = 2;   /* GPSPI2 - FSPI, Arduino's SPI object on this part */
+    ms->radio_cs = 0;
+    ms->radio_nss = 41;  /* Xiao S3 WIO; per board */
+    ms->radio_busy = 40;
+    ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
+    ms->psram_octal = false;
+    object_property_add_bool(obj, "psram-octal",
+                             esp32s3_get_psram_octal, esp32s3_set_psram_octal);
+    object_property_set_description(obj, "psram-octal",
+        "the external RAM is an octal (OPI) part rather than a quad one");
+    object_property_add_str(obj, "radio-path",
+                            esp32s3_get_radio_path, esp32s3_set_radio_path);
+    object_property_set_description(obj, "radio-path",
+        "unix socket of the SX1262 model to attach to the SPI bus");
+    object_property_add_uint32_ptr(obj, "radio-spi", &ms->radio_spi,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-spi",
+        "which SPI controller the radio is on (default 2, GPSPI2)");
+    object_property_add_uint32_ptr(obj, "radio-cs", &ms->radio_cs,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-cs",
+        "chip select the radio answers on (default 0)");
+    object_property_add_uint32_ptr(obj, "radio-nss", &ms->radio_nss,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-nss",
+        "GPIO the driver toggles as the radio's chip select (default 41)");
+    object_property_add_uint32_ptr(obj, "radio-busy", &ms->radio_busy,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-busy",
+        "GPIO the radio drives as its BUSY line (default 40)");
+    object_property_add_uint32_ptr(obj, "radio-fem", &ms->radio_fem,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-fem",
+        "GPIO the firmware drives as the front-end module's transmit enable "
+        "(default none)");
+}
+
 static const TypeInfo esp32s3_info = {
     .name = TYPE_ESP32S3_MACHINE,
     .parent = TYPE_MACHINE,
     .instance_size = sizeof(Esp32s3MachineState),
+    .instance_init = esp32s3_machine_instance_init,
     .class_init = esp32s3_machine_class_init,
 };
 
