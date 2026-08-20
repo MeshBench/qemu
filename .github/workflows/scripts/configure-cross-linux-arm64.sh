@@ -11,12 +11,16 @@ sed -z -i "s/\(.*dependency('libgcrypt'.*method: '\)config-tool\('.*\)/\1pkg-con
 echo DBG
 ./configure --help
 
+# No SDL: MeshBench drives QEMU headless over sockets and never asks for a
+# window, but linking SDL makes the binary refuse to start at all on a
+# machine without libSDL2 - which is most machines, and exactly the
+# audience a downloadable emulator exists for.
 ./configure \
     --bindir=bin \
     --cross-prefix=aarch64-linux-gnu- \
     --datadir=share/qemu \
     --enable-gcrypt \
-    --enable-sdl \
+    --disable-sdl \
     --enable-pixman \
     --enable-slirp \
     --enable-stack-protector \

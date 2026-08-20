@@ -14,11 +14,16 @@ echo DBG
 #
 #   MinGW build ref: https://github.com/msys2/MINGW-packages/blob/master/mingw-w64-qemu/PKGBUILD
 
+# No SDL: MeshBench drives QEMU headless over sockets and never asks for a
+# window, but linking SDL makes the binary refuse to start at all on a
+# machine without libSDL2 - which is most machines, and exactly the
+# audience a downloadable emulator exists for.
 ./configure \
     --bindir=bin \
     --datadir=share/qemu \
     --enable-gcrypt \
-    --enable-sdl \
+    --disable-sdl \
+    --extra-ldflags='-Wl,-rpath,$ORIGIN/../lib' \
     --enable-pixman \
     --enable-slirp \
     --enable-stack-protector \

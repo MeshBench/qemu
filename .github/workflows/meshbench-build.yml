@@ -1,0 +1,114 @@
+name: meshbench build
+
+# QEMU with our SX1262, built here so that setting MeshBench up is a download
+# rather than an afternoon with a toolchain.
+#
+# Only the Xtensa target: this fork exists to run ESP32 firmware against a
+# simulated radio, and building the other forty architectures would turn a six
+# minute job into an hour for nothing.
+
+on:
+  push:
+    branches: [meshbench-sx1262]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release from this build'
+        type: boolean
+        default: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          # libgcrypt is the one that matters. The esp32 machine references an
+          # RSA device that is gated on gcrypt, so a build without it fails at
+          # machine instantiation with "unknown type 'misc.esp32.rsa'" - long
+          # after the build succeeded, and nowhere near the cause.
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build pkg-config python3-venv \
+            libglib2.0-dev libpixman-1-dev libgcrypt20-dev libslirp-dev
+
+      - name: Configure
+        run: |
+          ./configure \
+            --target-list=xtensa-softmmu \
+            --disable-werror \
+            --enable-slirp \
+            --enable-gcrypt \
+            --prefix=/usr
+
+      - name: Build
+        run: ninja -C build -j"$(nproc)"
+
+      - name: Confirm this is our fork and not upstream
+        run: |
+          set -e
+          # The device only exists on this branch. Its absence means a checkout
+          # or a submodule quietly resolved to upstream, which would produce a
+          # QEMU that runs and reports no chip present - a wiring fault dressed
+          # as a hardware one.
+          test -f hw/ssi/sx1262.c || { echo "sx1262 device missing" >&2; exit 1; }
+          ./build/qemu-system-xtensa -machine help | grep -qi esp32
+          echo "sx1262 device present, esp32 machine available"
+
+      - name: Package
+        run: |
+          set -e
+          mkdir -p dist/qemu-meshbench/bin dist/qemu-meshbench/share
+          cp build/qemu-system-xtensa dist/qemu-meshbench/bin/
+          # QEMU resolves its own path to find these, which is why a bare copy
+          # of the binary does not run and a symlink does.
+          cp -r pc-bios dist/qemu-meshbench/share/qemu 2>/dev/null || \
+            cp -r build/pc-bios dist/qemu-meshbench/share/qemu
+          tar czf dist/qemu-meshbench-linux-x86_64.tar.gz -C dist qemu-meshbench
+          ls -la dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-meshbench-linux
+          path: dist/*.tar.gz
+
+      - name: Release
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="meshbench-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          cat > /tmp/notes.md <<'NOTES'
+          QEMU with an SX1262 on the SPI bus, for running published ESP32
+          MeshCore firmware against a simulated radio.
+
+          Three things upstream does not have: the SX1262 device itself, a GPIO
+          implementation with a working write handler, and machine properties
+          for the radio wiring. RadioLib drives chip select as an ordinary GPIO
+          rather than through the SPI controller, so without the GPIO work the
+          chip sees an unframed byte stream and the driver reports no chip.
+
+          Built with --enable-gcrypt. Without it the esp32 machine will not
+          instantiate: it references an RSA device gated on gcrypt.
+          NOTES
+          gh release create "$TAG" dist/*.tar.gz \
+            --title "QEMU for MeshBench ($TAG)" \
+            --notes-file /tmp/notes.md
+
+  # No runner for these yet. Left visible rather than absent: an absent row is
+  # forgotten, a skipped one with a reason gets picked up.
+  macos:
+    if: false   # no runner yet: this fork has never been built on Darwin
+    runs-on: macos-14
+    steps:
+      - run: echo "needs an arm64 and an x86_64 build, and neither is tested"
+
+  windows:
+    if: false   # no runner yet: radioserver's QEMU path uses Unix sockets
+    runs-on: windows-latest
+    steps:
+      - run: echo "needs the TCP path radioserver already has for Renode"
