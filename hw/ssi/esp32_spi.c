@@ -303,10 +303,22 @@ static void esp32_spi_do_command(Esp32SpiState* s, uint32_t cmd_reg)
             case 0x0b: case 0x0c:  /* Fast Read / Fast Read 4B */
             case 0x3b: case 0x3c:  /* DOR / DOR 4B */
             case 0x6b: case 0x6c:  /* QOR / QOR 4B */
-            case 0xbb: case 0xbc:  /* DIOR / DIOR 4B */
-            case 0xeb: case 0xec:  /* QIOR / QIOR 4B */
                 t.dummy_bytes = 1;
                 break;
+            /* DIOR and QIOR are not listed here, and the difference is not an
+             * oversight. m25p80 decodes the three above with
+             * decode_fast_read_cmd, which adds no dummy for a Winbond or
+             * GigaDevice part - so the byte has to come from here. It decodes
+             * the dual and quad I/O reads with decode_dio_read_cmd and
+             * decode_qio_read_cmd, which do add a continuous-read-mode byte
+             * for those manufacturers. Injecting one as well counted it twice
+             * and shifted the data by a byte.
+             *
+             * The ESP32 reads flash with 0xbb, so this was every filesystem
+             * read: writes landed correctly and read back as rubbish. SPIFFS
+             * could not mount what it had itself just written, could not
+             * format either, and the board ran with no persistent storage at
+             * all. */
             default:
                 break;
             }

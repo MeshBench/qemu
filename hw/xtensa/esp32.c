@@ -436,6 +436,24 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     for (int i = 0; i < ESP32_TIMG_COUNT; ++i) {
         s->timg[i].id = i;
 
+        /* The timer-group watchdogs keep the emulator's time, not the guest's.
+         *
+         * A watchdog is a bet that a piece of work finishes inside a deadline,
+         * and the deadline is calibrated to silicon. Emulated, the same work
+         * takes far longer against a virtual clock that keeps running, so
+         * operations that are comfortably quick on hardware - formatting a
+         * filesystem across 1.4 MB of flash, much of early boot - overrun it.
+         * The result was a board that never stayed up: eight boots and
+         * fourteen watchdog resets in a two-minute run, the filesystem
+         * reformatted each time, and the clock never initialised because no
+         * boot after the first was a power-on.
+         *
+         * Espressif's own guidance for running IDF under QEMU is the same:
+         * turn the watchdogs off. Set here rather than left to -global, which
+         * cannot name a device the machine builds for itself.
+         */
+        s->timg[i].wdt_disable = true;
+
         const hwaddr timg_base[] = {DR_REG_TIMERGROUP0_BASE, DR_REG_TIMERGROUP1_BASE};
         qdev_realize(DEVICE(&s->timg[i]), &s->periph_bus, &error_fatal);
 
@@ -701,6 +719,7 @@ struct Esp32MachineState {
     uint32_t radio_cs;
     uint32_t radio_nss;
     uint32_t radio_busy;
+    uint32_t radio_fem;
 
     Esp32SocState esp32;
     DeviceState *flash_dev;
@@ -722,9 +741,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
  * therefore what std_init(NULL) selects. Boards that route the radio elsewhere
  * override it with -machine radio-spi=N.
  */
+/* No GPIO here, rather than pin 0, which is a real pin on every one of these
+ * boards and would silently wire the module to whatever drives it. */
+#define ESP32_RADIO_PIN_NONE UINT32_MAX
+
 static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
                                      unsigned spi_index, unsigned cs,
-                                     unsigned nss_pin, unsigned busy_pin)
+                                     unsigned nss_pin, unsigned busy_pin,
+                                     unsigned fem_pin)
 {
     if (spi_index >= ESP32_SPI_COUNT) {
         error_report("radio-spi=%u out of range, ESP32 has %d SPI controllers",
@@ -754,6 +778,15 @@ static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
     qdev_connect_gpio_out_named(radio, "sx1262-busy", 0,
                                 qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
                                                        busy_pin));
+
+    /* The front-end module's transmit enable, on boards that have one. Left
+     * unwired by default because most do not, and a board with no module must
+     * not be modelled as one whose module is permanently off. */
+    if (fem_pin != ESP32_RADIO_PIN_NONE) {
+        qdev_connect_gpio_out_named(gpio, ESP32_GPIO_OUT, fem_pin,
+                                    qdev_get_gpio_in_named(radio,
+                                                           "sx1262-fem", 0));
+    }
 }
 
 static void esp32_machine_init_spi_flash(Esp32SocState *ss, BlockBackend* blk)
@@ -882,7 +915,7 @@ static void esp32_machine_init(MachineState *machine)
         if (mach->radio_path) {
             esp32_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
                                      mach->radio_cs, mach->radio_nss,
-                                     mach->radio_busy);
+                                     mach->radio_busy, mach->radio_fem);
         }
     }
 
@@ -1017,6 +1050,7 @@ static void esp32_machine_instance_init(Object *obj)
     ms->radio_cs = 0;
     ms->radio_nss = 18;  /* Heltec V2 and friends; per board */
     ms->radio_busy = 35;
+    ms->radio_fem = ESP32_RADIO_PIN_NONE;  /* most boards have no module */
     object_property_add_str(obj, "radio-path",
                             esp32_get_radio_path, esp32_set_radio_path);
     object_property_set_description(obj, "radio-path",
@@ -1037,6 +1071,11 @@ static void esp32_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-busy",
         "GPIO the radio drives as its BUSY line (default 35)");
+    object_property_add_uint32_ptr(obj, "radio-fem", &ms->radio_fem,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-fem",
+        "GPIO the firmware drives as the front-end module's transmit enable "
+        "(default none; 13 is TXEN on a Generic E22)");
 }
 
 static const TypeInfo esp32_info = {
