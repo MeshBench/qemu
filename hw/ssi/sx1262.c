@@ -17,8 +17,8 @@
  *     -device sx1262,bus=spi2,cs=0,path=/run/user/1000/meshbench-radio-7.sock
  *     -device sx1262,bus=spi2,cs=0,path=127.0.0.1:38217
  *
- * The path is anything QEMU's own socket_parse() understands, so a Unix
- * socket where there are Unix sockets and host:port everywhere else. Windows
+ * The path is a filesystem path for a Unix socket, or anything QEMU's own
+ * socket_parse() understands - so host:port everywhere else. Windows
  * is the reason: it has no Unix socket QEMU can use, and the radio model
  * already speaks TCP for the Renode backend, so one transport now serves all
  * three platforms.
@@ -160,10 +160,23 @@ static void sx1262_realize(SSIPeripheral *dev, Error **errp)
         return;
     }
 
-    /* socket_parse() rather than a hard-coded Unix address: it takes a bare
-     * path as Unix and "host:port" as TCP, which is what lets the same device
-     * work on Windows, where there is no Unix socket to hand. */
-    addr = socket_parse(s->path, errp);
+    /* socket_parse() rather than a hard-coded Unix address: it takes
+     * "host:port" as TCP, which is what lets the same device work on Windows,
+     * where there is no Unix socket to hand.
+     *
+     * A bare filesystem path is spelled for it. socket_parse() does not take
+     * one - it wants the "unix:" in front - and every caller here has always
+     * passed the path plain, so without this the device stopped being able to
+     * find a radio it had been finding for months:
+     *
+     *     sx1262: cannot make sense of path=/run/.../radio.sock
+     */
+    if (s->path[0] == '/') {
+        g_autofree char *spelled = g_strdup_printf("unix:%s", s->path);
+        addr = socket_parse(spelled, errp);
+    } else {
+        addr = socket_parse(s->path, errp);
+    }
     if (!addr) {
         error_prepend(errp, "sx1262: cannot make sense of path=%s: ", s->path);
         return;
