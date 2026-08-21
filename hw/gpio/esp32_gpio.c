@@ -56,10 +56,106 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     case A_GPIO_IN1:
         r = s->in1;
         break;
+    case A_GPIO_STATUS:
+        r = s->status;
+        break;
+    case A_GPIO_STATUS1:
+        r = s->status1;
+        break;
+    /* The per-core views of the same latched status.
+     *
+     * A handler reads the register for the core it is running on and
+     * dispatches the pins it finds set there. Both cores get the whole status
+     * rather than the slice their own enable bit asks for: the driver routes
+     * its interrupt to whichever core allocated it, which need not be the core
+     * the pin's enable bit names, and a handler that finds zero in its own
+     * register returns without calling anything. Reporting only one core's
+     * view is indistinguishable, from the guest, from an interrupt that never
+     * happened. */
+    case A_GPIO_PCPU_INT:
+    case A_GPIO_ACPU_INT:
+        r = s->status;
+        break;
+    case A_GPIO_PCPU_INT1:
+    case A_GPIO_ACPU_INT1:
+        r = s->status1;
+        break;
     default:
+        if (addr >= A_GPIO_PIN0 &&
+            addr < A_GPIO_PIN0 + 4 * ESP32_GPIO_PIN_MAX) {
+            r = s->pin[(addr - A_GPIO_PIN0) / 4];
+        }
         break;
     }
     return r;
+}
+
+/* The controller's line into the interrupt matrix.
+ *
+ * Level-driven from the latched status rather than pulsed on each edge: a
+ * handler that clears one pin while another is still pending must be entered
+ * again, and only a level can do that.
+ */
+static void esp32_gpio_update_irq(Esp32GpioState *s)
+{
+    qemu_set_irq(s->irq, (s->status | s->status1) != 0);
+}
+
+/* Latch an input change if the pin was configured to care about it.
+ *
+ * Silence is the default: a pin whose INT_ENA is clear, or whose INT_TYPE is
+ * disabled, records its new level and nothing more. That is what every pin in
+ * this machine did before anything needed an interrupt, and it stays true for
+ * all of them but the one that asked.
+ */
+static void esp32_gpio_latch_int(Esp32GpioState *s, int n, bool old_level,
+                                 bool level)
+{
+    uint32_t cfg = s->pin[n];
+    unsigned type = (cfg >> ESP32_GPIO_PIN_INT_TYPE_SHIFT) &
+                    ESP32_GPIO_PIN_INT_TYPE_MASK;
+    unsigned ena = (cfg >> ESP32_GPIO_PIN_INT_ENA_SHIFT) &
+                   ESP32_GPIO_PIN_INT_ENA_MASK;
+    bool fire = false;
+
+    if (ena == 0) {
+        return;
+    }
+    switch (type) {
+    case ESP32_GPIO_INT_RISING:
+        fire = !old_level && level;
+        break;
+    case ESP32_GPIO_INT_FALLING:
+        fire = old_level && !level;
+        break;
+    case ESP32_GPIO_INT_ANY_EDGE:
+        fire = old_level != level;
+        break;
+    case ESP32_GPIO_INT_LOW:
+    case ESP32_GPIO_INT_HIGH:
+        /* Deliberately not modelled. A level-triggered source re-asserts the
+         * moment the handler clears it, so it needs the pin to be released
+         * before the line drops - and getting that wrong starves the guest
+         * rather than failing visibly, which is exactly what happened when it
+         * was. Nothing here configures one; a firmware that does should see
+         * this refusal in the log rather than a machine that stops answering.
+         */
+        qemu_log_mask(LOG_UNIMP,
+                      "esp32_gpio: pin %d wants a level interrupt, not modelled\n",
+                      n);
+        return;
+    default:
+        return;
+    }
+    if (!fire) {
+        return;
+    }
+    if (n < ESP32_GPIO_BANK1_FIRST) {
+        s->status |= 1u << n;
+    } else {
+        s->status1 |= 1u << (n - ESP32_GPIO_BANK1_FIRST);
+    }
+    esp32_gpio_update_irq(s);
 }
 
 /* Push the pins whose level changed out to whatever is wired to them.
@@ -142,7 +238,44 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
         s->enable1 &= ~(uint32_t)value;
         break;
 
+    /* Write-one-to-clear, which is how a handler acknowledges. Dropping the
+     * line when the last bit goes is what stops the handler being re-entered
+     * for ever. */
+    case A_GPIO_STATUS:
+    case A_GPIO_STATUS_W1TC:
+        s->status &= ~(uint32_t)value;
+        esp32_gpio_update_irq(s);
+        break;
+    case A_GPIO_STATUS_W1TS:
+        s->status |= (uint32_t)value;
+        esp32_gpio_update_irq(s);
+        break;
+    case A_GPIO_STATUS1:
+    case A_GPIO_STATUS1_W1TC:
+        s->status1 &= ~(uint32_t)value;
+        esp32_gpio_update_irq(s);
+        break;
+    case A_GPIO_STATUS1_W1TS:
+        s->status1 |= (uint32_t)value;
+        esp32_gpio_update_irq(s);
+        break;
+
     default:
+        /* GPIO_PINn: which edge this pin interrupts on, and whether it does.
+         * A level-triggered pin can already be asserted when the driver
+         * enables it, so the configuration is re-evaluated against the level
+         * the pin is holding rather than waiting for a change that has
+         * already happened. */
+        if (addr >= A_GPIO_PIN0 &&
+            addr < A_GPIO_PIN0 + 4 * ESP32_GPIO_PIN_MAX) {
+            int n = (addr - A_GPIO_PIN0) / 4;
+            bool level = n < ESP32_GPIO_BANK1_FIRST
+                ? !!(s->in & (1u << n))
+                : !!(s->in1 & (1u << (n - ESP32_GPIO_BANK1_FIRST)));
+
+            (void)level;
+            s->pin[n] = (uint32_t)value;
+        }
         return;
     }
 
@@ -157,12 +290,17 @@ static void esp32_gpio_set_input(void *opaque, int n, int level)
     if (n < 0 || n >= ESP32_GPIO_PIN_COUNT) {
         return;
     }
+    bool old_level;
+
     if (n < 32) {
+        old_level = !!(s->in & (1u << n));
         s->in = (s->in & ~(1u << n)) | ((uint32_t)!!level << n);
     } else {
         int b = n - ESP32_GPIO_BANK1_FIRST;
+        old_level = !!(s->in1 & (1u << b));
         s->in1 = (s->in1 & ~(1u << b)) | ((uint32_t)!!level << b);
     }
+    esp32_gpio_latch_int(s, n, old_level, !!level);
 }
 
 static const MemoryRegionOps esp32_gpio_ops = {
@@ -219,6 +357,9 @@ static const VMStateDescription vmstate_esp32_gpio = {
         VMSTATE_UINT32(enable1, Esp32GpioState),
         VMSTATE_UINT32(in, Esp32GpioState),
         VMSTATE_UINT32(in1, Esp32GpioState),
+        VMSTATE_UINT32(status, Esp32GpioState),
+        VMSTATE_UINT32(status1, Esp32GpioState),
+        VMSTATE_UINT32_ARRAY(pin, Esp32GpioState, ESP32_GPIO_PIN_MAX),
         VMSTATE_END_OF_LIST()
     }
 };
