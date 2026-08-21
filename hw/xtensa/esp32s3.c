@@ -547,18 +547,25 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
 
 static uint64_t esp32s3_io_read(void *opaque, hwaddr addr, unsigned int size)
 {
-#if ESP32S3_IO_WARNING
-    warn_report("[ESP32-S3] Unsupported read to $%08lx, size = %i\n", ESP32S3_IO_START_ADDR + addr, size);
-#endif
+    /*
+     * Everything in the peripheral window that no device claimed lands here.
+     * Say so, rather than answering zero in silence: a register that reads as
+     * zero is a peripheral reporting something, and firmware that acts on it
+     * looks broken while the emulator looks fine. Six and a half thousand of
+     * these went unremarked in fifteen seconds of one boot.
+     */
+    qemu_log_mask(LOG_UNIMP, "esp32s3: unimplemented read at 0x%08lx, size %u\n",
+                  (unsigned long)(ESP32S3_IO_START_ADDR + addr), size);
     return 0;
 }
 
 
 static void esp32s3_io_write(void *opaque, hwaddr addr, uint64_t value, unsigned int size)
 {
-#if ESP32S3_IO_WARNING
-        warn_report("[ESP32-S3] Unsupported write $%08lx = %08lx\n", ESP32S3_IO_START_ADDR + addr, value);
-#endif
+    qemu_log_mask(LOG_UNIMP,
+                  "esp32s3: unimplemented write at 0x%08lx = 0x%08lx, size %u\n",
+                  (unsigned long)(ESP32S3_IO_START_ADDR + addr),
+                  (unsigned long)value, size);
 }
 
 
