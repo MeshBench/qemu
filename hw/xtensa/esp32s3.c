@@ -46,6 +46,7 @@
 #include "elf.h"
 
 #include "hw/ssi/esp32s3_spi.h"
+#include "hw/ssi/esp32s3_gpspi.h"
 #include "hw/misc/esp32s3_cache.h"
 #include "hw/char/esp32s3_uart.h"
 #include "hw/misc/esp32s3_rng.h"
@@ -134,10 +135,13 @@ typedef struct Esp32s3SocState {
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
 
-    /* GPSPI2, which the ESP32-S3 calls FSPI and Arduino calls SPI. The flash
-     * hangs off spi1; this is the general-purpose controller a board puts a
-     * radio on, and until now the machine did not have one at all. */
-    ESP32S3SpiState spi2;
+    /* The two general-purpose SPI controllers. The flash hangs off spi1 and
+     * uses a different register set entirely; these are what a board puts a
+     * radio on. Arduino calls GPSPI2 "FSPI" and GPSPI3 "HSPI", and a
+     * default-constructed SPIClass on this part is HSPI - so the published
+     * board images drive their radio through gpspi3, not gpspi2. */
+    ESP32S3GpspiState gpspi2;
+    ESP32S3GpspiState gpspi3;
     ESP32S3CacheState cache;
     ESP32S3EfuseState efuse;
     ESP32S3ClockState clock;
@@ -361,13 +365,14 @@ static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
                                        unsigned nss_pin, unsigned busy_pin,
                                        unsigned dio1_pin, unsigned fem_pin)
 {
-    if (spi_index != 2) {
-        error_report("radio-spi=%u: only GPSPI2 carries a radio on this machine",
+    if (spi_index != 2 && spi_index != 3) {
+        error_report("radio-spi=%u: this machine has GPSPI2 and GPSPI3",
                      spi_index);
         return;
     }
 
-    DeviceState *spi_master = DEVICE(&ss->spi2);
+    DeviceState *spi_master = spi_index == 3
+        ? DEVICE(&ss->gpspi3) : DEVICE(&ss->gpspi2);
     BusState *spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *radio = qdev_new("sx1262");
 
@@ -731,7 +736,8 @@ static void esp32s3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
-    object_initialize_child(OBJECT(ss), "spi2", &ss->spi2, TYPE_ESP32S3_SPI);
+    object_initialize_child(OBJECT(ss), "gpspi2", &ss->gpspi2, TYPE_ESP32S3_GPSPI);
+    object_initialize_child(OBJECT(ss), "gpspi3", &ss->gpspi3, TYPE_ESP32S3_GPSPI);
     object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
@@ -787,9 +793,13 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* GPSPI2, the general-purpose controller a board puts a radio on. */
     {
-        sysbus_realize(SYS_BUS_DEVICE(&ss->spi2), &error_fatal);
-        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->spi2), 0);
+        sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi2), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi2), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE, mr, 0);
+
+        sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi3), &error_fatal);
+        MemoryRegion *mr3 = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi3), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI3_BASE, mr3, 0);
     }
 
     /* (Extmem) Cache realization */
