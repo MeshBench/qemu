@@ -317,7 +317,18 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
     s->out1 = 0;
     s->enable = 0;
     s->enable1 = 0;
-    s->in = 0;
+    /*
+     * GPIO0 comes up high. It is a strapping pin with an internal pull-up
+     * enabled out of reset on both these parts - which is the only reason the
+     * chip boots from flash instead of into download mode - and a board's
+     * program button pulls it down when somebody presses it.
+     *
+     * Reading it low is not a neutral default. MeshCore's repeater watches
+     * this pin for a long press and powers the board off when it sees one, so
+     * a Heltec V3 that came up with the button apparently held down shut
+     * itself down after two minutes, every time, before it had adverted once.
+     */
+    s->in = 1u << 0;
     s->in1 = 0;
 }
 
