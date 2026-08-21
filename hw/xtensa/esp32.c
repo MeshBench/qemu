@@ -415,6 +415,13 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
 
     qdev_realize(DEVICE(&s->gpio), &s->periph_bus, &error_fatal);
     esp32_soc_add_periph_device(sys_mem, &s->gpio, DR_REG_GPIO_BASE);
+    /* The GPIO controller's line into the interrupt matrix. Nothing needed it
+     * while every pin in this machine was read as a level; a peripheral that
+     * signals by raising a pin needs the edge to reach the CPU, and without
+     * this the controller latches its status register and no handler ever
+     * runs. */
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio), 0,
+                       qdev_get_gpio_in(intmatrix_dev, ETS_GPIO_INTR_SOURCE));
 
     for (int i = 0; i < ESP32_UART_COUNT; ++i) {
         const hwaddr uart_base[] = {DR_REG_UART_BASE, DR_REG_UART1_BASE, DR_REG_UART2_BASE};
@@ -719,6 +726,7 @@ struct Esp32MachineState {
     uint32_t radio_cs;
     uint32_t radio_nss;
     uint32_t radio_busy;
+    uint32_t radio_dio1;
     uint32_t radio_fem;
 
     Esp32SocState esp32;
@@ -748,7 +756,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
 static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
                                      unsigned spi_index, unsigned cs,
                                      unsigned nss_pin, unsigned busy_pin,
-                                     unsigned fem_pin)
+                                     unsigned dio1_pin, unsigned fem_pin)
 {
     if (spi_index >= ESP32_SPI_COUNT) {
         error_report("radio-spi=%u out of range, ESP32 has %d SPI controllers",
@@ -778,6 +786,16 @@ static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
     qdev_connect_gpio_out_named(radio, "sx1262-busy", 0,
                                 qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
                                                        busy_pin));
+
+    /* DIO1, the packet-received interrupt. MeshCore reads a packet only from
+     * the ISR this line fires, so a board left without it receives correctly
+     * and never collects anything. Left unwired when no pin is given, which
+     * is what a board that genuinely has no such line should look like. */
+    if (dio1_pin != ESP32_RADIO_PIN_NONE) {
+        qdev_connect_gpio_out_named(radio, "sx1262-dio1", 0,
+                                    qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
+                                                           dio1_pin));
+    }
 
     /* The front-end module's transmit enable, on boards that have one. Left
      * unwired by default because most do not, and a board with no module must
@@ -915,7 +933,8 @@ static void esp32_machine_init(MachineState *machine)
         if (mach->radio_path) {
             esp32_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
                                      mach->radio_cs, mach->radio_nss,
-                                     mach->radio_busy, mach->radio_fem);
+                                     mach->radio_busy, mach->radio_dio1,
+                                     mach->radio_fem);
         }
     }
 
@@ -1050,6 +1069,10 @@ static void esp32_machine_instance_init(Object *obj)
     ms->radio_cs = 0;
     ms->radio_nss = 18;  /* Heltec V2 and friends; per board */
     ms->radio_busy = 35;
+    /* No interrupt line unless the board says which pin. Wiring one that is
+     * not there would raise an edge on a GPIO the firmware is using for
+     * something else. */
+    ms->radio_dio1 = ESP32_RADIO_PIN_NONE;
     ms->radio_fem = ESP32_RADIO_PIN_NONE;  /* most boards have no module */
     object_property_add_str(obj, "radio-path",
                             esp32_get_radio_path, esp32_set_radio_path);
@@ -1071,6 +1094,11 @@ static void esp32_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-busy",
         "GPIO the radio drives as its BUSY line (default 35)");
+    object_property_add_uint32_ptr(obj, "radio-dio1", &ms->radio_dio1,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-dio1",
+        "GPIO the radio drives as its DIO1 interrupt, which is the only way "
+        "the firmware learns a packet arrived (default none)");
     object_property_add_uint32_ptr(obj, "radio-fem", &ms->radio_fem,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-fem",

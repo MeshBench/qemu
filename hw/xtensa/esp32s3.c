@@ -336,6 +336,7 @@ struct Esp32s3MachineState {
     uint32_t radio_cs;
     uint32_t radio_nss;
     uint32_t radio_busy;
+    uint32_t radio_dio1;
     uint32_t radio_fem;
 };
 
@@ -358,7 +359,7 @@ struct Esp32s3MachineState {
 static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
                                        unsigned spi_index, unsigned cs,
                                        unsigned nss_pin, unsigned busy_pin,
-                                       unsigned fem_pin)
+                                       unsigned dio1_pin, unsigned fem_pin)
 {
     if (spi_index != 2) {
         error_report("radio-spi=%u: only GPSPI2 carries a radio on this machine",
@@ -386,6 +387,16 @@ static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
     qdev_connect_gpio_out_named(radio, "sx1262-busy", 0,
                                 qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
                                                        busy_pin));
+
+    /* DIO1, the packet-received interrupt. MeshCore reads a packet only from
+     * the ISR this line fires, so a board left without it receives correctly
+     * and never collects anything. Left unwired when no pin is given, which
+     * is what a board that genuinely has no such line should look like. */
+    if (dio1_pin != ESP32S3_RADIO_PIN_NONE) {
+        qdev_connect_gpio_out_named(radio, "sx1262-dio1", 0,
+                                    qdev_get_gpio_in_named(gpio, ESP32_GPIO_IN,
+                                                           dio1_pin));
+    }
 
     /* The front-end module's transmit enable, on boards that have one. Left
      * unwired by default because most do not, and a board with no module must
@@ -965,7 +976,8 @@ static void esp32s3_machine_init(MachineState *machine)
         if (mach->radio_path) {
             esp32s3_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
                                        mach->radio_cs, mach->radio_nss,
-                                       mach->radio_busy, mach->radio_fem);
+                                       mach->radio_busy, mach->radio_dio1,
+                                       mach->radio_fem);
         }
     }
 
@@ -1110,6 +1122,8 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->radio_cs = 0;
     ms->radio_nss = 41;  /* Xiao S3 WIO; per board */
     ms->radio_busy = 40;
+    /* No interrupt line unless the board says which pin. */
+    ms->radio_dio1 = ESP32S3_RADIO_PIN_NONE;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
     ms->psram_octal = false;
     object_property_add_bool(obj, "psram-octal",
@@ -1136,6 +1150,11 @@ static void esp32s3_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-busy",
         "GPIO the radio drives as its BUSY line (default 40)");
+    object_property_add_uint32_ptr(obj, "radio-dio1", &ms->radio_dio1,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "radio-dio1",
+        "GPIO the radio drives as its DIO1 interrupt, which is the only way "
+        "the firmware learns a packet arrived (default none)");
     object_property_add_uint32_ptr(obj, "radio-fem", &ms->radio_fem,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-fem",

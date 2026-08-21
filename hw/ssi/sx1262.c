@@ -34,6 +34,10 @@
 #include "migration/vmstate.h"
 #include "io/channel-socket.h"
 #include "qemu/sockets.h"
+#include "qemu/timer.h"
+
+/* How often DIO1 is sampled, in milliseconds of guest time. */
+#define DIO1_POLL_MS 1
 
 #define TYPE_SX1262 "sx1262"
 OBJECT_DECLARE_SIMPLE_TYPE(SX1262State, SX1262)
@@ -48,6 +52,13 @@ enum {
     RADIO_CS_RELEASE  = 0x02,
     RADIO_XFER        = 0x03,   /* one byte out, one byte back */
     RADIO_READ_BUSY   = 0x04,   /* the BUSY line, which RadioLib spins on */
+    /* Whether DIO1 is asserted. MeshCore reads a received packet only from the
+     * interrupt this line raises - RadioLibWrapper::recvRaw is gated on a flag
+     * set solely by setPacketReceivedAction - so a chip that receives
+     * perfectly and has no wire to say so is a node that never forwards
+     * anything. The radio model has answered this opcode since the nRF52
+     * needed it; this device simply never asked. */
+    RADIO_READ_IRQ    = 0x05,
     RADIO_SET_FEM     = 0x06,   /* front-end module enable, level in byte 2 */
 };
 
@@ -64,9 +75,19 @@ struct SX1262State {
      * should say so on the console rather than by hanging the guest. */
     bool warned;
 
-    /* NSS in, BUSY out. Both are ordinary GPIOs on these boards rather than
-     * the SPI controller's own lines, so the board wires them pin to pin. */
+    /* NSS in, BUSY and DIO1 out. All ordinary GPIOs on these boards rather
+     * than the SPI controller's own lines, so the board wires them pin to
+     * pin. */
     qemu_irq busy_out;
+    qemu_irq dio1_out;
+
+    /* DIO1 is polled rather than pushed, because the wire protocol is
+     * request-response and the radio model has no way to call back. A
+     * kilohertz is far finer than anything the radio times: the shortest
+     * thing DIO1 signals is a preamble detection, tens of milliseconds at
+     * these spreading factors. */
+    QEMUTimer *dio1_timer;
+    bool dio1_level;
 };
 
 static bool sx1262_rpc(SX1262State *s, const uint8_t *req, size_t req_len,
@@ -134,6 +155,30 @@ static void sx1262_fem(void *opaque, int n, int level)
     sx1262_rpc(s, req, sizeof(req), NULL, 0);
 }
 
+/* Ask the chip whether DIO1 is asserted, and drive the pin to match.
+ *
+ * Edge-driven, so a quiet chip costs one request per tick and no interrupt
+ * traffic at all. The line is left alone when the model cannot be reached:
+ * an unattached radio should look like a chip with nothing to say, not like
+ * one holding an interrupt high for ever. */
+static void sx1262_poll_dio1(void *opaque)
+{
+    SX1262State *s = SX1262(opaque);
+    uint8_t req = RADIO_READ_IRQ;
+    uint8_t rsp = 0;
+
+    if (sx1262_rpc(s, &req, 1, &rsp, 1)) {
+        bool asserted = rsp != 0;
+
+        if (asserted != s->dio1_level) {
+            s->dio1_level = asserted;
+            qemu_set_irq(s->dio1_out, asserted);
+        }
+    }
+    timer_mod(s->dio1_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + DIO1_POLL_MS);
+}
+
 static uint32_t sx1262_transfer(SSIPeripheral *dev, uint32_t val)
 {
     SX1262State *s = SX1262(dev);
@@ -199,8 +244,14 @@ static void sx1262_realize(SSIPeripheral *dev, Error **errp)
     qdev_init_gpio_in_named(DEVICE(dev), sx1262_nss, "sx1262-nss", 1);
     qdev_init_gpio_in_named(DEVICE(dev), sx1262_fem, "sx1262-fem", 1);
     qdev_init_gpio_out_named(DEVICE(dev), &s->busy_out, "sx1262-busy", 1);
-    /* Not busy until the model says otherwise. */
+    qdev_init_gpio_out_named(DEVICE(dev), &s->dio1_out, "sx1262-dio1", 1);
+    /* Not busy, and nothing to report, until the model says otherwise. */
     qemu_set_irq(s->busy_out, 0);
+    qemu_set_irq(s->dio1_out, 0);
+
+    s->dio1_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, sx1262_poll_dio1, s);
+    timer_mod(s->dio1_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + DIO1_POLL_MS);
 }
 
 static const VMStateDescription vmstate_sx1262 = {
