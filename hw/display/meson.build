@@ -32,6 +32,7 @@ system_ss.add(when: 'CONFIG_CG3', if_true: files('cg3.c'))
 system_ss.add(when: 'CONFIG_MACFB', if_true: files('macfb.c'))
 system_ss.add(when: 'CONFIG_NEXTCUBE', if_true: files('next-fb.c'))
 system_ss.add(when: 'CONFIG_ESP_RGB', if_true: files('esp_rgb.c'))
+system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files('ssd1306_panel.c'))
 
 system_ss.add(when: 'CONFIG_VGA', if_true: files('vga.c'))
 system_ss.add(when: 'CONFIG_VIRTIO', if_true: files('virtio-dmabuf.c'))

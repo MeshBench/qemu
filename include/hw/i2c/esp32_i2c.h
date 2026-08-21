@@ -38,6 +38,10 @@ typedef struct Esp32I2CState {
     uint32_t stop_hold_reg;
     uint32_t stop_setup_reg;
     uint32_t cmd_reg[ESP32_I2C_CMD_COUNT];
+    /* Which command encoding this controller uses. The ESP32-S3 and the
+     * RISC-V parts renumber three opcodes; everything else about the
+     * peripheral is the same. */
+    bool newer_opcodes;
 } Esp32I2CState;
 
 
@@ -104,6 +108,16 @@ typedef enum {
     I2C_OPCODE_READ   = 2,
     I2C_OPCODE_STOP   = 3,
     I2C_OPCODE_END    = 4,
+    /* The ESP32-S3 and the RISC-V parts renumber three of these. Same
+     * peripheral, same registers, different command encoding - which is worth
+     * saying explicitly because reading a list with the wrong table does not
+     * fail, it executes the wrong commands: a stop becomes a read, so the
+     * transfer never ends and the controller reads a FIFO nobody filled. */
+    I2C_OPCODE_S3_RSTART = 6,
+    I2C_OPCODE_S3_WRITE  = 1,
+    I2C_OPCODE_S3_STOP   = 2,
+    I2C_OPCODE_S3_READ   = 3,
+    I2C_OPCODE_S3_END    = 4,
 } i2c_opcode_t;
 
 #endif /* ESP32_I2C_H */

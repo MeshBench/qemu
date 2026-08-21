@@ -1,5 +1,6 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "hw/qdev-properties.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
 #include "hw/i2c/esp32_i2c.h"
@@ -100,6 +101,7 @@ static void esp32_i2c_write(void * opaque, hwaddr addr, uint64_t value, unsigned
 {
     Esp32I2CState * s = Esp32_I2C(opaque);
 
+
     switch(addr) {
     case A_I2C_CTR:
         if (FIELD_EX32(value, I2C_CTR, MS_MODE) != 1) {
@@ -178,6 +180,16 @@ static void esp32_i2c_do_transaction(Esp32I2CState * s)
     for (int i_cmd = 0; i_cmd < ESP32_I2C_CMD_COUNT && !stop_or_end; ++i_cmd) {
         uint32_t cmd = s->cmd_reg[i_cmd];
         char opcode = FIELD_EX32(cmd, I2C_CMD, OPCODE);
+        if (s->newer_opcodes) {
+            /* Translated rather than handled twice: the commands mean the
+             * same things, they are only numbered differently. */
+            switch (opcode) {
+            case I2C_OPCODE_S3_RSTART: opcode = I2C_OPCODE_RSTART; break;
+            case I2C_OPCODE_S3_STOP:   opcode = I2C_OPCODE_STOP;   break;
+            case I2C_OPCODE_S3_READ:   opcode = I2C_OPCODE_READ;   break;
+            default: break; /* write and end are numbered alike */
+            }
+        }
         switch (opcode) {
             case I2C_OPCODE_RSTART:
                 i2c_end_transfer(s->bus);
@@ -261,10 +273,17 @@ static void esp32_i2c_init(Object * obj)
     fifo8_create(&s->rx_fifo, ESP32_I2C_FIFO_LENGTH);
 }
 
+static Property esp32_i2c_properties[] = {
+    DEFINE_PROP_BOOL("newer-opcodes", Esp32I2CState, newer_opcodes, false),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void esp32_i2c_class_init(ObjectClass * klass, void * data)
 {
     ResettableClass *rc = RESETTABLE_CLASS(klass);
+    DeviceClass *dc = DEVICE_CLASS(klass);
     rc->phases.hold = esp32_i2c_reset_hold;
+    device_class_set_props(dc, esp32_i2c_properties);
 }
 
 static const TypeInfo esp32_i2c_type_info = {
