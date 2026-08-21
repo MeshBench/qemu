@@ -835,6 +835,14 @@ static void complete_collecting_data(Flash *s)
     case WRSR2:
         switch (get_man(s)) {
         case MAN_WINBOND:
+        /*
+         * GigaDevice's GD25Q parts carry the quad-enable bit in the same
+         * place as Winbond's and set it the same way. Without this the bit
+         * can be written and never takes, so a host that reads it back to
+         * confirm - which is what ESP-IDF does before it will use quad mode -
+         * finds it clear and gives up on the chip.
+         */
+        case MAN_GIGADEVICE:
             s->quad_enable = !!(s->data[0] & 0x02);
             break;
         default:
@@ -1321,6 +1329,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
 
         switch (get_man(s)) {
         case MAN_WINBOND:
+        case MAN_GIGADEVICE:
             s->needed_bytes = 1;
             s->state = STATE_COLLECTING_DATA;
             s->pos = 0;
@@ -1500,6 +1509,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
             s->quad_enable = true;
             break;
         case MAN_WINBOND:
+        case MAN_GIGADEVICE:
             s->data[0] = (!!s->quad_enable) << 1;
             s->pos = 0;
             s->len = 1;
