@@ -15,6 +15,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/timer.h"
 #include "qemu/log.h"
 #include "qemu/error-report.h"
 #include "qemu/cutils.h"
@@ -48,6 +49,16 @@ OBJECT_DECLARE_SIMPLE_TYPE(MBInputState, MB_INPUT)
 #define MB_INPUT_MSG 8
 #define MB_INPUT_TAG 'B'
 
+typedef struct MBInputState MBInputState;
+
+/* One line's identity, so a timer firing knows which it belongs to. */
+typedef struct MBLine {
+    MBInputState *owner;
+    int index;
+} MBLine;
+
+static void mb_input_drive(MBInputState *s, int i, int level);
+
 struct MBInputState {
     SysBusDevice parent_obj;
 
@@ -57,6 +68,20 @@ struct MBInputState {
     int fd;
     int npins;
     int pin[MB_INPUT_MAX];
+
+    /* When each line was pressed, and the release waiting on it.
+     *
+     * The same reason the touch panel holds a contact: firmware reads these
+     * by polling - the trackball counts edges from a task that runs every few
+     * milliseconds - and a press and release delivered in the same instant is
+     * a movement that never happened. The interface produces exactly that,
+     * because a mouse click is over in microseconds. So a press is held for a
+     * span of the guest's own clock, which is the only clock that means
+     * anything here: this machine runs at about a sixth of real speed. */
+    int64_t held_until[MB_INPUT_MAX];
+    bool release_pending[MB_INPUT_MAX];
+    QEMUTimer *release_timer[MB_INPUT_MAX];
+    MBLine lines[MB_INPUT_MAX];
     qemu_irq line[MB_INPUT_MAX];
 
     uint8_t buf[MB_INPUT_MSG];
@@ -96,11 +121,52 @@ static void mb_input_read(void *opaque)
         int level = s->buf[2] ? 1 : 0;
         for (int i = 0; i < s->npins; i++) {
             if (s->pin[i] == pin) {
-                qemu_set_irq(s->line[i], level);
+                mb_input_drive(s, i, level);
                 break;
             }
         }
     }
+}
+
+/* MB_HOLD_NS is how long a press lasts at the least, in guest time: a tenth
+ * of a second and a half, which is what a finger does and several turns of
+ * anything polling for it. */
+#define MB_HOLD_NS (150 * 1000 * 1000)
+
+/* A line reads low while it is held, so a release is the level going high. */
+static void mb_input_release(void *opaque)
+{
+    MBLine *l = opaque;
+    MBInputState *s = l->owner;
+    int i = l->index;
+
+    if (!s->release_pending[i]) {
+        return;
+    }
+    s->release_pending[i] = false;
+    qemu_set_irq(s->line[i], 1);
+}
+
+/* mb_input_drive moves one line, holding a press that was too short to have
+ * been made by a hand. */
+static void mb_input_drive(MBInputState *s, int i, int level)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (level == 0) {
+        timer_del(s->release_timer[i]);
+        s->release_pending[i] = false;
+        s->held_until[i] = now + MB_HOLD_NS;
+        qemu_set_irq(s->line[i], 0);
+        return;
+    }
+    if (now < s->held_until[i]) {
+        s->release_pending[i] = true;
+        timer_mod_ns(s->release_timer[i], s->held_until[i]);
+        return;
+    }
+    s->release_pending[i] = false;
+    qemu_set_irq(s->line[i], 1);
 }
 
 static void mb_input_connect(MBInputState *s)
@@ -147,6 +213,14 @@ static void mb_input_realize(DeviceState *dev, Error **errp)
             s->pin[s->npins++] = (int)v;
             p = (*end == ',') ? end + 1 : end;
         }
+    }
+    for (int i = 0; i < s->npins; i++) {
+        s->lines[i].owner = s;
+        s->lines[i].index = i;
+        s->release_pending[i] = false;
+        s->held_until[i] = 0;
+        s->release_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                           mb_input_release, &s->lines[i]);
     }
     if (s->npins == 0) {
         error_setg(errp, "mb-input: no pins named, so nothing could be pressed");
