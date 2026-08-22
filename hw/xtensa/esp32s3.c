@@ -355,6 +355,9 @@ struct Esp32s3MachineState {
      * chip select and the command/data line that says what a byte means. */
     uint32_t panel_cs;
     uint32_t panel_dc;
+    /* Where button presses arrive from, and which pins they can move. */
+    char *input_path;
+    char *input_pins;
     uint32_t panel_w;
     uint32_t panel_h;
     uint32_t radio_cs;
@@ -1039,6 +1042,30 @@ static void esp32s3_machine_init(MachineState *machine)
          * when the board declares one: a machine with no panel path has no
          * display, and a driver that probes for one is told nothing answers,
          * which is exactly what it is told today. */
+        /* Buttons, where the board has any and something is listening. Each
+         * declared pin gets a line into the GPIO controller, so a press is
+         * the pin going where a finger would take it. */
+        if (mach->input_path && *mach->input_path &&
+            mach->input_pins && *mach->input_pins) {
+            DeviceState *in = qdev_new("mb-input");
+            qdev_prop_set_string(in, "path", mach->input_path);
+            qdev_prop_set_string(in, "pins", mach->input_pins);
+            sysbus_realize_and_unref(SYS_BUS_DEVICE(in), &error_fatal);
+            const char *p = mach->input_pins;
+            for (int i = 0; *p; i++) {
+                char *end = NULL;
+                long pin = strtol(p, &end, 10);
+                if (end == p) {
+                    break;
+                }
+                qdev_connect_gpio_out_named(in, "mb-input", i,
+                                            qdev_get_gpio_in_named(DEVICE(&ss->gpio),
+                                                                   ESP32_GPIO_IN,
+                                                                   (int)pin));
+                p = (*end == ',') ? end + 1 : end;
+            }
+        }
+
         if (mach->panel_path && *mach->panel_path &&
             mach->panel_cs != ESP32S3_RADIO_PIN_NONE) {
             /* A colour panel shares the radio's controller, told apart by its
@@ -1209,6 +1236,30 @@ static void esp32s3_set_radio_path(Object *obj, const char *value, Error **errp)
     ms->radio_path = g_strdup(value);
 }
 
+static char *esp32s3_get_input_path(Object *obj, Error **errp)
+{
+    return g_strdup(ESP32S3_MACHINE(obj)->input_path);
+}
+
+static void esp32s3_set_input_path(Object *obj, const char *value, Error **errp)
+{
+    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
+    g_free(ms->input_path);
+    ms->input_path = g_strdup(value);
+}
+
+static char *esp32s3_get_input_pins(Object *obj, Error **errp)
+{
+    return g_strdup(ESP32S3_MACHINE(obj)->input_pins);
+}
+
+static void esp32s3_set_input_pins(Object *obj, const char *value, Error **errp)
+{
+    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
+    g_free(ms->input_pins);
+    ms->input_pins = g_strdup(value);
+}
+
 static char *esp32s3_get_panel_path(Object *obj, Error **errp)
 {
     return g_strdup(ESP32S3_MACHINE(obj)->panel_path);
@@ -1282,6 +1333,16 @@ static void esp32s3_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "panel-addr",
         "the display's I2C address (default 0x3C)");
+    object_property_add_str(obj, "input-path",
+                            esp32s3_get_input_path, esp32s3_set_input_path);
+    object_property_set_description(obj, "input-path",
+        "unix socket button presses arrive on; without it the board's buttons "
+        "sit where their pull-ups leave them, which is nobody pressing them");
+    object_property_add_str(obj, "input-pins",
+                            esp32s3_get_input_pins, esp32s3_set_input_pins);
+    object_property_set_description(obj, "input-pins",
+        "comma separated GPIOs a press may move, which are the board's own "
+        "button pins");
     object_property_add_uint32_ptr(obj, "panel-cs", &ms->panel_cs,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "panel-cs",
