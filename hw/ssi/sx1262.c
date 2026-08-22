@@ -185,6 +185,13 @@ static uint32_t sx1262_transfer(SSIPeripheral *dev, uint32_t val)
     uint8_t req[2] = { RADIO_XFER, (uint8_t)val };
     uint8_t rsp = 0;
 
+    /* Bytes on this bus are not necessarily ours. A board can hang a display
+     * and a card reader off the same controller as the radio, told apart only
+     * by which chip select is low, and a peripheral that answered while
+     * another was addressed would corrupt both. */
+    if (!s->cs_active) {
+        return 0x00;
+    }
     if (!sx1262_rpc(s, req, sizeof(req), &rsp, 1)) {
         /* 0x00 rather than 0xFF: an all-ones read looks like a chip reporting
          * every status bit set, which sends RadioLib down error paths that
