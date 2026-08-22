@@ -59,6 +59,17 @@ typedef struct ESP32S3ClockState {
     uint32_t app_cpu_addr;
     
     uint32_t sys_ext_dev_enc_dec_ctrl;
+
+    /* The Bluetooth controller's low-power clock divider and its source.
+     *
+     * Ordinary storage, and that is the whole of what they need to be: the
+     * controller writes the source it wants and reads the register back to
+     * find out whether the hardware took it. Dropping the write made that
+     * read-back say no, and esp_bt_controller_init asserts rather than
+     * returning an error - so a board with no Bluetooth rebooted in a loop
+     * instead of coming up without it. */
+    uint32_t bt_lpck_div_int;
+    uint32_t bt_lpck_div_frac;
 } ESP32S3ClockState;
 
 typedef struct ESP32S3ClockClass {

@@ -38,6 +38,23 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/* SENS_SAR_TSENS_CTRL_REG: the die temperature sensor, whose reading shares a
+ * register with its control bits.
+ *
+ * Modelled for the same reason the converter is. The PHY reads the die
+ * temperature to pick its transmit power table and waits for a reading, and a
+ * register file that answers zero is a temperature no sensor produces - so the
+ * wait never ends. Measured on a T-Deck running wadamesh: the boot stopped in
+ * temperature_sensor_get_raw_value with the board otherwise alive.
+ *
+ * The number is a fixed mid-scale code rather than anything derived. This
+ * simulator does not model die temperature at all, and a made-up curve would
+ * be a number somebody might later believe. */
+#define A_TSENS_CTRL 0x50
+#define R_TSENS_OUT_MASK 0xFF
+#define R_TSENS_READY (1u << 8)
+#define TSENS_CODE 0x80
+
 /* SENS_SAR_MEAS1_CTRL2_REG, the one register that is not just storage. */
 #define A_MEAS1_CTRL2      0x0C
 #define R_MEAS1_DATA_MASK  0xFFFF
@@ -130,6 +147,12 @@ static uint64_t esp32s3_saradc_read(void *opaque, hwaddr addr, unsigned int size
     Esp32s3SarAdcState *s = ESP32S3_SARADC(opaque);
     uint32_t v = s->reg[addr / 4];
 
+    if (addr == A_TSENS_CTRL) {
+        /* Ready as soon as it is asked. The guest sets the dump bit, then
+         * spins on ready - so a reading that is never ready is a boot that
+         * never finishes, which is what this was. */
+        return (v & ~(uint32_t)R_TSENS_OUT_MASK) | R_TSENS_READY | TSENS_CODE;
+    }
     if (addr == A_MEAS1_CTRL2) {
         /* A conversion on this part takes tens of microseconds and the driver
          * spins on the bit rather than waiting on an interrupt. Answering the

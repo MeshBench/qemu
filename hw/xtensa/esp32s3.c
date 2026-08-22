@@ -1042,6 +1042,21 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, esp32s3_memmap[ESP32S3_MEMREGION_FRAMEBUF].base, &ss->rgb.vram, 0);
     }
 
+    /* The Bluetooth controller's exchange memory.
+     *
+     * A block of SRAM below the data RAM this machine already has, which the
+     * controller's ROM copies its radio configuration into before it starts.
+     * Absent, that copy is a load from nowhere: measured as a LoadStoreError
+     * at 0x3FC00100 inside r_rw_rf_init, which panics and reboots - so a board
+     * whose firmware merely offers Bluetooth could not finish booting. The
+     * memory is real on the part; only its contents mean nothing here,
+     * because nothing is on the air. */
+    {
+        MemoryRegion *btem = g_new(MemoryRegion, 1);
+        memory_region_init_ram(btem, NULL, "esp32s3.btem", 0x80000, &error_fatal);
+        memory_region_add_subregion(sys_mem, 0x3FC00000, btem);
+    }
+
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
 
@@ -1091,6 +1106,29 @@ static void esp32s3_machine_init(MachineState *machine)
             }
         } else {
             esp32s3_machine_init_sd(ss);
+        }
+
+        /* The radio front end and its analog bus. Stubbed rather than
+         * modelled - this machine has one radio and it is the LoRa
+         * transceiver - but answered rather than absent, because the PHY
+         * waits on these and an unanswered wait never ends. See the device. */
+        {
+            static const struct { uint32_t base, size; } rf[] = {
+                { 0x60006000, 0x1000 },  /* the front end */
+                { 0x6000E000, 0x0200 },  /* the analog bus, below I2S */
+                { 0x60033000, 0x1000 },  /* the MAC the PHY hands over to */
+                { 0x60031000, 0x1000 },  /* the Bluetooth controller */
+                { 0x60032000, 0x1000 },  /* and the rest of its block */
+                { 0x60019000, 0x1000 },  /* LEDC, which drives the backlight */
+            };
+            for (size_t i = 0; i < ARRAY_SIZE(rf); i++) {
+                DeviceState *dev = qdev_new("misc.esp32s3.rfstub");
+                qdev_prop_set_uint32(dev, "base", rf[i].base);
+                qdev_prop_set_uint32(dev, "size", rf[i].size);
+                sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+                memory_region_add_subregion_overlap(sys_mem, rf[i].base,
+                    sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0), 0);
+            }
         }
 
         /* The SAR ADC. Always fitted, because every one of these boards has

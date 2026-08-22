@@ -35,7 +35,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(GT911State, GT911_TOUCH)
 /* The registers a driver actually reads. */
 #define GT_REG_ID     0x8140 /* four bytes, "911" and a nul */
 #define GT_REG_STATUS 0x814E /* bit 7 set means a report is ready */
-#define GT_REG_POINT  0x8150 /* track id, x, y, size, reserved */
+#define GT_REG_TRACK  0x814F /* the touch's track identifier */
+#define GT_REG_POINT  0x8150 /* x low, x high, y low, y high, size, reserved */
 
 struct GT911State {
     I2CSlave parent_obj;
@@ -129,18 +130,24 @@ static uint8_t gt911_at(GT911State *s, uint16_t reg, int off)
          * in it. Nothing touching is a valid report of zero points, which is
          * what stops a driver waiting for ever. */
         return s->down ? 0x81 : 0x80;
+    case GT_REG_TRACK:
+        return 0;
+    /* The point record, which begins at the coordinate rather than at the
+     * track identifier - that sits one byte below. Getting this off by one
+     * puts the track number where the driver expects the low half of X, so
+     * every touch lands at the left edge, which is how it was found. */
     case GT_REG_POINT + 0:
-        return 0; /* track id */
-    case GT_REG_POINT + 1:
         return s->x & 0xff;
-    case GT_REG_POINT + 2:
+    case GT_REG_POINT + 1:
         return s->x >> 8;
-    case GT_REG_POINT + 3:
+    case GT_REG_POINT + 2:
         return s->y & 0xff;
-    case GT_REG_POINT + 4:
+    case GT_REG_POINT + 3:
         return s->y >> 8;
+    case GT_REG_POINT + 4:
+        return s->down ? 20 : 0; /* contact size, low half */
     case GT_REG_POINT + 5:
-        return s->down ? 20 : 0; /* contact size */
+        return 0;
     case GT_REG_POINT + 6:
         return 0;
     default:

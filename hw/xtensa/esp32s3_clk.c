@@ -70,6 +70,12 @@ static uint64_t esp32s3_clock_read(void *opaque, hwaddr addr, unsigned int size)
         case A_SYSTEM_EXTERNAL_DEVICE_ENCRYPT_DECRYPT_CONTROL:
             r = s->sys_ext_dev_enc_dec_ctrl;
             break;
+        case A_SYSTEM_BT_LPCK_DIV_INT:
+            r = s->bt_lpck_div_int;
+            break;
+        case A_SYSTEM_BT_LPCK_DIV_FRAC:
+            r = s->bt_lpck_div_frac;
+            break;
         default:
 #if CLOCK_WARNING
             warn_report("[CLOCK] Unsupported read from %08lx\n", addr);
@@ -96,6 +102,12 @@ static void esp32s3_clock_write(void *opaque, hwaddr addr, uint64_t value,
             break;
         case A_SYSTEM_EXTERNAL_DEVICE_ENCRYPT_DECRYPT_CONTROL:
             s->sys_ext_dev_enc_dec_ctrl = value;
+            break;
+        case A_SYSTEM_BT_LPCK_DIV_INT:
+            s->bt_lpck_div_int = (uint32_t)value;
+            break;
+        case A_SYSTEM_BT_LPCK_DIV_FRAC:
+            s->bt_lpck_div_frac = (uint32_t)value;
             break;
         default:
 #if CLOCK_WARNING
