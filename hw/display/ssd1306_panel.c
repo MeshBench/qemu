@@ -106,13 +106,19 @@ static void ssd1306_connect(SSD1306PanelState *s)
  * is nothing, and a protocol that can drop an update is a protocol that will. */
 static void ssd1306_send_frame(SSD1306PanelState *s)
 {
-    uint8_t hdr[8] = {'M', 'B', 'F', '1', SSD_COLS, SSD_PAGES * 8, 1, 0};
+    /* magic, then width and height as 16-bit little-endian, bits per pixel,
+     * and whether the panel is switched on. Sixteen bits because a colour
+     * panel on the same protocol is 320 across and a byte cannot say so. */
+    uint8_t hdr[10] = {'M', 'B', 'F', '2',
+                       SSD_COLS & 0xff, SSD_COLS >> 8,
+                       (SSD_PAGES * 8) & 0xff, (SSD_PAGES * 8) >> 8,
+                       1, 0};
 
     ssd1306_connect(s);
     if (s->fd < 0) {
         return;
     }
-    hdr[7] = s->on ? 1 : 0;
+    hdr[9] = s->on ? 1 : 0;
 
     struct iovec iov[2] = {
         {.iov_base = hdr, .iov_len = sizeof(hdr)},

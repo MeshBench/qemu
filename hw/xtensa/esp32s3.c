@@ -351,6 +351,12 @@ struct Esp32s3MachineState {
     uint32_t panel_i2c;
     uint32_t panel_addr;
     uint32_t panel_offset;
+    /* A colour panel instead, on the SPI controller the radio is on: its own
+     * chip select and the command/data line that says what a byte means. */
+    uint32_t panel_cs;
+    uint32_t panel_dc;
+    uint32_t panel_w;
+    uint32_t panel_h;
     uint32_t radio_cs;
     uint32_t radio_nss;
     uint32_t radio_busy;
@@ -821,7 +827,9 @@ static void esp32s3_machine_init(MachineState *machine)
             const hwaddr i2c_base[] = {DR_REG_I2C_EXT_BASE, DR_REG_I2C_EXT_BASE + 0x11000};
             qdev_realize(DEVICE(&ss->i2c[i]), &ss->periph_bus, &error_fatal);
             esp32s3_soc_add_periph_device(sys_mem, &ss->i2c[i], i2c_base[i]);
-            /* TEMP: interrupt not connected */
+            sysbus_connect_irq(SYS_BUS_DEVICE(&ss->i2c[i]), 0,
+                               qdev_get_gpio_in(intmatrix_dev,
+                                                ETS_I2C_EXT0_INTR_SOURCE + i));
         }
 
         sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi2), &error_fatal);
@@ -1031,7 +1039,33 @@ static void esp32s3_machine_init(MachineState *machine)
          * when the board declares one: a machine with no panel path has no
          * display, and a driver that probes for one is told nothing answers,
          * which is exactly what it is told today. */
-        if (mach->panel_path && *mach->panel_path) {
+        if (mach->panel_path && *mach->panel_path &&
+            mach->panel_cs != ESP32S3_RADIO_PIN_NONE) {
+            /* A colour panel shares the radio's controller, told apart by its
+             * own select. Both peripherals ignore bytes that arrive while
+             * their select is high, which is what makes sharing safe. */
+            DeviceState *master = mach->radio_spi == 3
+                ? DEVICE(&ss->gpspi3) : DEVICE(&ss->gpspi2);
+            BusState *bus = qdev_get_child_bus(master, "spi");
+            DeviceState *tft = qdev_new("st7789-panel");
+            qdev_prop_set_string(tft, "path", mach->panel_path);
+            qdev_prop_set_uint32(tft, "width", mach->panel_w);
+            qdev_prop_set_uint32(tft, "height", mach->panel_h);
+            /* The bus wants a distinct index per peripheral even though
+             * neither device uses the controller's own select - both are
+             * framed by a GPIO the firmware drives. Any index but the
+             * radio's will do. */
+            qdev_prop_set_uint8(tft, "cs", mach->radio_cs == 0 ? 1 : 0);
+            qdev_realize_and_unref(tft, bus, &error_fatal);
+            qdev_connect_gpio_out_named(DEVICE(&ss->gpio), ESP32_GPIO_OUT,
+                                        mach->panel_cs,
+                                        qdev_get_gpio_in_named(tft, "st7789-cs", 0));
+            if (mach->panel_dc != ESP32S3_RADIO_PIN_NONE) {
+                qdev_connect_gpio_out_named(DEVICE(&ss->gpio), ESP32_GPIO_OUT,
+                                            mach->panel_dc,
+                                            qdev_get_gpio_in_named(tft, "st7789-dc", 0));
+            }
+        } else if (mach->panel_path && *mach->panel_path) {
             unsigned n = mach->panel_i2c < ESP32S3_I2C_COUNT ? mach->panel_i2c : 0;
             I2CBus *bus = I2C_BUS(qdev_get_child_bus(DEVICE(&ss->i2c[n]), "i2c"));
             DeviceState *panel = qdev_new("ssd1306-panel");
@@ -1200,6 +1234,10 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->panel_i2c = 0;
     ms->panel_addr = 0x3C;
     ms->panel_offset = 0;
+    ms->panel_cs = ESP32S3_RADIO_PIN_NONE;
+    ms->panel_dc = ESP32S3_RADIO_PIN_NONE;
+    ms->panel_w = 320;
+    ms->panel_h = 240;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
     ms->psram_octal = false;
     object_property_add_bool(obj, "psram-octal",
@@ -1244,6 +1282,19 @@ static void esp32s3_machine_instance_init(Object *obj)
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "panel-addr",
         "the display's I2C address (default 0x3C)");
+    object_property_add_uint32_ptr(obj, "panel-cs", &ms->panel_cs,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "panel-cs",
+        "GPIO the driver toggles as a colour panel's chip select; giving it "
+        "puts the display on the radio's SPI controller rather than on I2C");
+    object_property_add_uint32_ptr(obj, "panel-dc", &ms->panel_dc,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "panel-dc",
+        "GPIO that says whether a byte to the panel is a command or data");
+    object_property_add_uint32_ptr(obj, "panel-w", &ms->panel_w,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_add_uint32_ptr(obj, "panel-h", &ms->panel_h,
+                                   OBJ_PROP_FLAG_READWRITE);
     object_property_add_uint32_ptr(obj, "panel-offset", &ms->panel_offset,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "panel-offset",
