@@ -105,9 +105,16 @@ static void gt911_set(GT911State *s, uint16_t x, uint16_t y, bool down)
 
     if (down) {
         /* A press, or a drag while pressed. Either way it lands at once, so
-         * dragging is smooth rather than gated on anything. */
-        timer_del(s->release_timer);
-        s->release_pending = false;
+         * dragging is smooth rather than gated on anything.
+         *
+         * A press arriving while the last lift is still waiting has to let
+         * that lift happen first, or two quick taps become one long one and
+         * the second is never a tap at all. */
+        if (s->release_pending) {
+            timer_del(s->release_timer);
+            s->release_pending = false;
+            s->down = false;
+        }
         if (!s->down) {
             s->hold_until = now + GT_HOLD_NS;
         }

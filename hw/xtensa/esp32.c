@@ -26,6 +26,7 @@
 #include "hw/xtensa/esp32.h"
 #include "hw/gpio/esp32_gpio.h"
 #include "hw/misc/ssi_psram.h"
+#include "hw/misc/esp32s3_saradc.h"
 #include "hw/sd/dwc_sdmmc.h"
 #include "core-esp32/core-isa.h"
 #include "qemu/datadir.h"
@@ -544,7 +545,28 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
 
     esp32_soc_add_unimp_device(sys_mem, "esp32.analog", DR_REG_ANA_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_RTCIO_BASE, 0x400);
-    esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_SENS_BASE, 0x400);
+    /* The converter, rather than nothing.
+     *
+     * This block used to be answered with zeroes, which is not the same as
+     * being absent: firmware that reads its battery starts a conversion and
+     * waits for a done bit, and a done bit that never arrives is a board
+     * stopped dead with nothing on the console to say why. The same fault was
+     * measured on the S3 at twenty-eight million reads of one register, and
+     * this part has it too - latent only because a repeater is asked for its
+     * cell voltage rarely, and a companion is asked constantly.
+     *
+     * Same device as the S3's, told where this part keeps the two registers
+     * that mean anything. The original ESP32 has no ready bit on its
+     * temperature sensor, which is what the zero says. */
+    {
+        DeviceState *adc = qdev_new(TYPE_ESP32S3_SARADC);
+        qdev_prop_set_uint32(adc, "meas-offset", 0x54);
+        qdev_prop_set_uint32(adc, "tsens-offset", 0x4C);
+        qdev_prop_set_uint32(adc, "tsens-ready-bit", 0);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(adc), &error_fatal);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SENS_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(adc), 0), 0);
+    }
     esp32_soc_add_unimp_device(sys_mem, "esp32.iomux", DR_REG_IO_MUX_BASE, 0x2000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.hinf", DR_REG_HINF_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.slc", DR_REG_SLC_BASE, 0x1000);
