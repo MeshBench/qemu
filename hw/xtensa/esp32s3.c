@@ -51,6 +51,8 @@
 #include "hw/misc/esp32s3_cache.h"
 #include "hw/char/esp32s3_uart.h"
 #include "hw/misc/esp32s3_rng.h"
+#include "hw/misc/esp32s3_saradc.h"
+#include "hw/ssi/ssi.h"
 
 #include "hw/nvram/esp32s3_efuse.h"
 #include "hw/xtensa/esp32s3_clk.h"
@@ -358,6 +360,18 @@ struct Esp32s3MachineState {
     /* Where button presses arrive from, and which pins they can move. */
     char *input_path;
     char *input_pins;
+    /* Which pin selects the board's card slot, where it has one on the same
+     * bus as its radio and its display. The card itself arrives as an ordinary
+     * drive, so a node's storage is a file the operator can look inside -
+     * which a real handheld only offers by taking the card out. */
+    uint32_t card_cs;
+
+    /* Which ADC channel the board's battery divider sits on, and what it
+     * reads at bring-up. Nothing here invents a voltage: the engine knows the
+     * node's cell and says so, and keeps saying so as it drains. */
+    uint32_t bat_adc_channel;
+    uint32_t bat_adc_raw;
+
     /* The I2C addresses a keyboard and a touch panel answer on, or zero
      * where the board has neither. */
     uint32_t kbd_addr;
@@ -1032,7 +1046,6 @@ static void esp32s3_machine_init(MachineState *machine)
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
 
     
-    esp32s3_machine_init_sd(ss);
 
     {
         Esp32s3MachineState *mach = ESP32S3_MACHINE(OBJECT(machine));
@@ -1041,6 +1054,61 @@ static void esp32s3_machine_init(MachineState *machine)
                                        mach->radio_cs, mach->radio_nss,
                                        mach->radio_busy, mach->radio_dio1,
                                        mach->radio_fem);
+        }
+        /* The card. One drive, put wherever the board's slot actually is:
+         * on these handhelds it is a third device on the bus the radio and
+         * the display already share, told apart by its own select, and only
+         * the controller-attached kind where a board has that instead. */
+        if (mach->card_cs != ESP32S3_RADIO_PIN_NONE) {
+            DeviceState *master = mach->radio_spi == 3
+                ? DEVICE(&ss->gpspi3) : DEVICE(&ss->gpspi2);
+            BusState *bus = qdev_get_child_bus(master, "spi");
+            DeviceState *slot = qdev_new("ssi-sd");
+            /* An index of its own, as the display has: the bus wants them
+             * distinct even where the select is a GPIO rather than the
+             * controller's. */
+            qdev_prop_set_uint8(slot, "cs", mach->radio_cs == 0 ? 2 : 3);
+            qdev_realize_and_unref(slot, bus, &error_fatal);
+            qemu_irq cs = qdev_get_gpio_in_named(slot, SSI_GPIO_CS, 0);
+            qdev_connect_gpio_out_named(DEVICE(&ss->gpio), ESP32_GPIO_OUT,
+                                        mach->card_cs, cs);
+            /* Deselected until somebody selects it, because the pin has a
+             * pull-up on the board and the controller here starts its outputs
+             * low. A card left selected answers every byte on a bus it shares
+             * with the radio and the display, and what came back was the two
+             * replies merged - a firmware that reads the radio's version
+             * string gets it with the card's answer laid over the top and
+             * reports no chip fitted. Which is what happened, on a build that
+             * never touches the card at all. */
+            qemu_set_irq(cs, 1);
+            DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
+            if (dinfo) {
+                DeviceState *card = qdev_new(TYPE_SD_CARD_SPI);
+                qdev_prop_set_drive_err(card, "drive",
+                                        blk_by_legacy_dinfo(dinfo), &error_fatal);
+                qdev_realize_and_unref(card,
+                    qdev_get_child_bus(slot, "sd-bus"), &error_fatal);
+            }
+        } else {
+            esp32s3_machine_init_sd(ss);
+        }
+
+        /* The SAR ADC. Always fitted, because every one of these boards has
+         * one and a firmware that reads an absent one waits for ever - which
+         * is what the published companion build did here, polling the done
+         * bit twenty-nine million times in a single run. */
+        {
+            DeviceState *adc = qdev_new(TYPE_ESP32S3_SARADC);
+            if (mach->input_path && *mach->input_path) {
+                qdev_prop_set_string(adc, "path", mach->input_path);
+            }
+            sysbus_realize_and_unref(SYS_BUS_DEVICE(adc), &error_fatal);
+            Esp32s3SarAdcState *a = ESP32S3_SARADC(adc);
+            if (mach->bat_adc_channel < ESP32S3_SARADC_CHANNELS) {
+                a->raw[mach->bat_adc_channel] = (uint16_t)mach->bat_adc_raw;
+            }
+            memory_region_add_subregion_overlap(sys_mem, DR_REG_SENS_BASE,
+                sysbus_mmio_get_region(SYS_BUS_DEVICE(adc), 0), 0);
         }
         /* The display, on whichever I2C controller the board puts it. Only
          * when the board declares one: a machine with no panel path has no
@@ -1313,6 +1381,9 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->panel_dc = ESP32S3_RADIO_PIN_NONE;
     ms->kbd_addr = 0;
     ms->touch_addr = 0;
+    ms->bat_adc_channel = 0;
+    ms->bat_adc_raw = 0;
+    ms->card_cs = ESP32S3_RADIO_PIN_NONE;
     ms->panel_w = 320;
     ms->panel_h = 240;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
@@ -1369,6 +1440,19 @@ static void esp32s3_machine_instance_init(Object *obj)
     object_property_set_description(obj, "input-pins",
         "comma separated GPIOs a press may move, which are the board's own "
         "button pins");
+    object_property_add_uint32_ptr(obj, "card-cs", &ms->card_cs,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "card-cs",
+        "GPIO that selects the card slot on the radio's own SPI bus");
+    object_property_add_uint32_ptr(obj, "bat-adc-channel", &ms->bat_adc_channel,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "bat-adc-channel",
+        "ADC1 channel the board's battery divider is wired to");
+    object_property_add_uint32_ptr(obj, "bat-adc-raw", &ms->bat_adc_raw,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "bat-adc-raw",
+        "what that channel reads at bring-up, as the twelve bit number the "
+        "firmware sees");
     object_property_add_uint32_ptr(obj, "kbd-addr", &ms->kbd_addr,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "kbd-addr",

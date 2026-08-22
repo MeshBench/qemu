@@ -60,7 +60,12 @@ static uint64_t esp32_i2c_read(void * opaque, hwaddr addr, unsigned int size)
         return esp32_i2c_get_status_reg(s);
     case A_I2C_FIFO_DATA: {
         if (fifo8_num_used(&s->rx_fifo) == 0) {
-            error_report("esp32_i2c: read I2C FIFO while it is empty");
+            /* The guest's doing, not ours: a driver that reads the FIFO after
+             * a transfer nobody acknowledged. Said where guest errors are
+             * asked for rather than on every node's console, where a bus scan
+             * across a hundred addresses buried everything else. */
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "esp32_i2c: read I2C FIFO while it is empty\n");
             return 0xee;
         }
         uint8_t res = fifo8_pop(&s->rx_fifo);
