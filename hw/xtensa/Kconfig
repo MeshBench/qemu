@@ -39,6 +39,7 @@ config XTENSA_ESP32S3
     depends on XTENSA
     select SSI
     select SSI_M25P80
+    select SSI_SD
     select UNIMP
     select OPENCORES_ETH
     select DWC_SDMMC
