@@ -50,13 +50,16 @@
  * The number is a fixed mid-scale code rather than anything derived. This
  * simulator does not model die temperature at all, and a made-up curve would
  * be a number somebody might later believe. */
-#define A_TSENS_CTRL 0x50
+#define A_TSENS_CTRL_S3 0x50
 #define R_TSENS_OUT_MASK 0xFF
-#define R_TSENS_READY (1u << 8)
+#define R_TSENS_READY_S3 (1u << 8)
 #define TSENS_CODE 0x80
 
-/* SENS_SAR_MEAS1_CTRL2_REG, the one register that is not just storage. */
-#define A_MEAS1_CTRL2      0x0C
+/* The conversion register, the one that is not just storage. Its offset moves
+ * between parts - the S3 puts it at 0x0C and the original ESP32 at 0x54 -
+ * while the bits inside it are the same, so where it is comes from a property
+ * and what is in it does not. */
+#define A_MEAS1_CTRL2_S3   0x0C
 #define R_MEAS1_DATA_MASK  0xFFFF
 #define R_MEAS1_DONE       (1u << 16)
 #define R_MEAS1_START      (1u << 17)
@@ -147,13 +150,13 @@ static uint64_t esp32s3_saradc_read(void *opaque, hwaddr addr, unsigned int size
     Esp32s3SarAdcState *s = ESP32S3_SARADC(opaque);
     uint32_t v = s->reg[addr / 4];
 
-    if (addr == A_TSENS_CTRL) {
+    if (addr == s->tsens_off) {
         /* Ready as soon as it is asked. The guest sets the dump bit, then
          * spins on ready - so a reading that is never ready is a boot that
          * never finishes, which is what this was. */
-        return (v & ~(uint32_t)R_TSENS_OUT_MASK) | R_TSENS_READY | TSENS_CODE;
+        return (v & ~(uint32_t)R_TSENS_OUT_MASK) | s->tsens_ready_bit | TSENS_CODE;
     }
-    if (addr == A_MEAS1_CTRL2) {
+    if (addr == s->meas_off) {
         /* A conversion on this part takes tens of microseconds and the driver
          * spins on the bit rather than waiting on an interrupt. Answering the
          * first poll costs the guest nothing it would notice and saves the
@@ -171,7 +174,7 @@ static void esp32s3_saradc_write(void *opaque, hwaddr addr, uint64_t value,
 {
     Esp32s3SarAdcState *s = ESP32S3_SARADC(opaque);
 
-    if (addr == A_MEAS1_CTRL2) {
+    if (addr == s->meas_off) {
         /* Done and data are the peripheral's to say. Keeping them out of what
          * is stored is what makes dropping start and raising it again start a
          * new conversion rather than return the last one. */
@@ -209,6 +212,10 @@ static void esp32s3_saradc_init(Object *obj)
 
 static Property esp32s3_saradc_props[] = {
     DEFINE_PROP_STRING("path", Esp32s3SarAdcState, path),
+    DEFINE_PROP_UINT32("meas-offset", Esp32s3SarAdcState, meas_off, A_MEAS1_CTRL2_S3),
+    DEFINE_PROP_UINT32("tsens-offset", Esp32s3SarAdcState, tsens_off, A_TSENS_CTRL_S3),
+    DEFINE_PROP_UINT32("tsens-ready-bit", Esp32s3SarAdcState, tsens_ready_bit,
+                       R_TSENS_READY_S3),
     DEFINE_PROP_END_OF_LIST(),
 };
 

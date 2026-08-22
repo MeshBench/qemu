@@ -26,6 +26,13 @@ struct Esp32s3SarAdcState {
      * reads. Set at bring-up and updated over the board's input channel. */
     uint16_t raw[ESP32S3_SARADC_CHANNELS];
 
+    /* Where this part keeps the two registers that mean something, and which
+     * bit of the temperature one says a reading is ready. The original ESP32
+     * has no such bit at all, which is what zero means here. */
+    uint32_t meas_off;
+    uint32_t tsens_off;
+    uint32_t tsens_ready_bit;
+
     char *path;
     int fd;
     uint8_t buf[8];

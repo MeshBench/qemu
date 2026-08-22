@@ -154,8 +154,15 @@ static void mb_input_drive(MBInputState *s, int i, int level)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
     if (level == 0) {
-        timer_del(s->release_timer[i]);
-        s->release_pending[i] = false;
+        /* A press arriving while the last release is still waiting has to let
+         * that release happen first. Cancelling it would leave the line low
+         * throughout and the firmware would see one edge where two were made:
+         * pressing an arrow twice quickly would move the selection once. */
+        if (s->release_pending[i]) {
+            timer_del(s->release_timer[i]);
+            s->release_pending[i] = false;
+            qemu_set_irq(s->line[i], 1);
+        }
         s->held_until[i] = now + MB_HOLD_NS;
         qemu_set_irq(s->line[i], 0);
         return;
