@@ -47,6 +47,7 @@
 
 #include "hw/ssi/esp32s3_spi.h"
 #include "hw/ssi/esp32s3_gpspi.h"
+#include "hw/i2c/esp32_i2c.h"
 #include "hw/misc/esp32s3_cache.h"
 #include "hw/char/esp32s3_uart.h"
 #include "hw/misc/esp32s3_rng.h"
@@ -142,6 +143,11 @@ typedef struct Esp32s3SocState {
      * board images drive their radio through gpspi3, not gpspi2. */
     ESP32S3GpspiState gpspi2;
     ESP32S3GpspiState gpspi3;
+    /* The two I2C controllers. Every board here that carries a display puts it
+     * on one of these, and the T-Deck's keyboard and touch panel as well - the
+     * machine answered none of it until now, so 1,356 register accesses a boot
+     * went into the peripheral window and came back zero. */
+    Esp32I2CState i2c[ESP32S3_I2C_COUNT];
     ESP32S3CacheState cache;
     ESP32S3EfuseState efuse;
     ESP32S3ClockState clock;
@@ -337,6 +343,14 @@ struct Esp32s3MachineState {
     bool psram_octal;
     char *radio_path;
     uint32_t radio_spi;
+    /* The board's display, where it has one: which controller, on which I2C
+     * controller at which address, and the socket its picture leaves by.
+     * Absent by default, because a board whose panel nobody has established
+     * must show nothing rather than something invented. */
+    char *panel_path;
+    uint32_t panel_i2c;
+    uint32_t panel_addr;
+    uint32_t panel_offset;
     uint32_t radio_cs;
     uint32_t radio_nss;
     uint32_t radio_busy;
@@ -736,6 +750,16 @@ static void esp32s3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
+    for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
+        char name[8];
+        snprintf(name, sizeof(name), "i2c%d", i);
+        object_initialize_child(OBJECT(ss), name, &ss->i2c[i], TYPE_ESP32_I2C);
+        /* This part numbers three of the I2C commands differently from the
+         * ESP32 the model was written for. Same registers, different
+         * encoding - and reading a list with the wrong table does not fail,
+         * it runs the wrong commands. */
+        qdev_prop_set_bit(DEVICE(&ss->i2c[i]), "newer-opcodes", true);
+    }
     object_initialize_child(OBJECT(ss), "gpspi2", &ss->gpspi2, TYPE_ESP32S3_GPSPI);
     object_initialize_child(OBJECT(ss), "gpspi3", &ss->gpspi3, TYPE_ESP32S3_GPSPI);
     object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
@@ -793,6 +817,13 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* GPSPI2, the general-purpose controller a board puts a radio on. */
     {
+        for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
+            const hwaddr i2c_base[] = {DR_REG_I2C_EXT_BASE, DR_REG_I2C_EXT_BASE + 0x11000};
+            qdev_realize(DEVICE(&ss->i2c[i]), &ss->periph_bus, &error_fatal);
+            esp32s3_soc_add_periph_device(sys_mem, &ss->i2c[i], i2c_base[i]);
+            /* TEMP: interrupt not connected */
+        }
+
         sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi2), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi2), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE, mr, 0);
@@ -996,6 +1027,19 @@ static void esp32s3_machine_init(MachineState *machine)
                                        mach->radio_busy, mach->radio_dio1,
                                        mach->radio_fem);
         }
+        /* The display, on whichever I2C controller the board puts it. Only
+         * when the board declares one: a machine with no panel path has no
+         * display, and a driver that probes for one is told nothing answers,
+         * which is exactly what it is told today. */
+        if (mach->panel_path && *mach->panel_path) {
+            unsigned n = mach->panel_i2c < ESP32S3_I2C_COUNT ? mach->panel_i2c : 0;
+            I2CBus *bus = I2C_BUS(qdev_get_child_bus(DEVICE(&ss->i2c[n]), "i2c"));
+            DeviceState *panel = qdev_new("ssd1306-panel");
+            qdev_prop_set_string(panel, "path", mach->panel_path);
+            qdev_prop_set_uint32(panel, "column-offset", mach->panel_offset);
+            qdev_prop_set_uint8(panel, "address", (uint8_t)mach->panel_addr);
+            qdev_realize_and_unref(panel, BUS(bus), &error_fatal);
+        }
     }
 
     /* Need MMU initialized prior to ELF loading,
@@ -1131,6 +1175,18 @@ static void esp32s3_set_radio_path(Object *obj, const char *value, Error **errp)
     ms->radio_path = g_strdup(value);
 }
 
+static char *esp32s3_get_panel_path(Object *obj, Error **errp)
+{
+    return g_strdup(ESP32S3_MACHINE(obj)->panel_path);
+}
+
+static void esp32s3_set_panel_path(Object *obj, const char *value, Error **errp)
+{
+    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
+    g_free(ms->panel_path);
+    ms->panel_path = g_strdup(value);
+}
+
 static void esp32s3_machine_instance_init(Object *obj)
 {
     Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
@@ -1141,6 +1197,9 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->radio_busy = 40;
     /* No interrupt line unless the board says which pin. */
     ms->radio_dio1 = ESP32S3_RADIO_PIN_NONE;
+    ms->panel_i2c = 0;
+    ms->panel_addr = 0x3C;
+    ms->panel_offset = 0;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
     ms->psram_octal = false;
     object_property_add_bool(obj, "psram-octal",
@@ -1172,6 +1231,24 @@ static void esp32s3_machine_instance_init(Object *obj)
     object_property_set_description(obj, "radio-dio1",
         "GPIO the radio drives as its DIO1 interrupt, which is the only way "
         "the firmware learns a packet arrived (default none)");
+    object_property_add_str(obj, "panel-path",
+                            esp32s3_get_panel_path, esp32s3_set_panel_path);
+    object_property_set_description(obj, "panel-path",
+        "unix socket the board's display sends its picture to; without it the "
+        "board has no display, which is what a board with none looks like");
+    object_property_add_uint32_ptr(obj, "panel-i2c", &ms->panel_i2c,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "panel-i2c",
+        "which I2C controller the display is on (default 0)");
+    object_property_add_uint32_ptr(obj, "panel-addr", &ms->panel_addr,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "panel-addr",
+        "the display's I2C address (default 0x3C)");
+    object_property_add_uint32_ptr(obj, "panel-offset", &ms->panel_offset,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "panel-offset",
+        "column offset of the display: 0 for an SSD1306, 2 for an SH1106, "
+        "and getting it wrong slides the whole picture sideways");
     object_property_add_uint32_ptr(obj, "radio-fem", &ms->radio_fem,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-fem",
