@@ -358,6 +358,10 @@ struct Esp32s3MachineState {
     /* Where button presses arrive from, and which pins they can move. */
     char *input_path;
     char *input_pins;
+    /* The I2C addresses a keyboard and a touch panel answer on, or zero
+     * where the board has neither. */
+    uint32_t kbd_addr;
+    uint32_t touch_addr;
     uint32_t panel_w;
     uint32_t panel_h;
     uint32_t radio_cs;
@@ -1066,6 +1070,26 @@ static void esp32s3_machine_init(MachineState *machine)
             }
         }
 
+        /* A keyboard and a touch panel, where the board has them. Both are
+         * I2C devices and both listen on the same socket the buttons do,
+         * picking out the messages tagged for them. */
+        if (mach->input_path && *mach->input_path && mach->kbd_addr != 0) {
+            unsigned n = mach->panel_i2c < ESP32S3_I2C_COUNT ? mach->panel_i2c : 0;
+            I2CBus *bus = I2C_BUS(qdev_get_child_bus(DEVICE(&ss->i2c[n]), "i2c"));
+            DeviceState *kbd = qdev_new("tdeck-keyboard");
+            qdev_prop_set_string(kbd, "path", mach->input_path);
+            qdev_prop_set_uint8(kbd, "address", (uint8_t)mach->kbd_addr);
+            qdev_realize_and_unref(kbd, BUS(bus), &error_fatal);
+        }
+        if (mach->input_path && *mach->input_path && mach->touch_addr != 0) {
+            unsigned n = mach->panel_i2c < ESP32S3_I2C_COUNT ? mach->panel_i2c : 0;
+            I2CBus *bus = I2C_BUS(qdev_get_child_bus(DEVICE(&ss->i2c[n]), "i2c"));
+            DeviceState *tp = qdev_new("gt911-touch");
+            qdev_prop_set_string(tp, "path", mach->input_path);
+            qdev_prop_set_uint8(tp, "address", (uint8_t)mach->touch_addr);
+            qdev_realize_and_unref(tp, BUS(bus), &error_fatal);
+        }
+
         if (mach->panel_path && *mach->panel_path &&
             mach->panel_cs != ESP32S3_RADIO_PIN_NONE) {
             /* A colour panel shares the radio's controller, told apart by its
@@ -1287,6 +1311,8 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->panel_offset = 0;
     ms->panel_cs = ESP32S3_RADIO_PIN_NONE;
     ms->panel_dc = ESP32S3_RADIO_PIN_NONE;
+    ms->kbd_addr = 0;
+    ms->touch_addr = 0;
     ms->panel_w = 320;
     ms->panel_h = 240;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
@@ -1343,6 +1369,15 @@ static void esp32s3_machine_instance_init(Object *obj)
     object_property_set_description(obj, "input-pins",
         "comma separated GPIOs a press may move, which are the board's own "
         "button pins");
+    object_property_add_uint32_ptr(obj, "kbd-addr", &ms->kbd_addr,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "kbd-addr",
+        "I2C address the board's keyboard answers on, or zero for a board "
+        "with none");
+    object_property_add_uint32_ptr(obj, "touch-addr", &ms->touch_addr,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "touch-addr",
+        "I2C address the board's touch panel answers on, or zero for none");
     object_property_add_uint32_ptr(obj, "panel-cs", &ms->panel_cs,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "panel-cs",
