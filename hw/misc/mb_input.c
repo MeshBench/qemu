@@ -37,10 +37,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(MBInputState, MB_INPUT)
  * raising quietly. */
 #define MB_INPUT_MAX 8
 
-/* One message: a tag, the pin, and the level to drive it to. The pin rather
- * than an index into the list, so the sender does not have to know or keep in
- * step with the order the lines were declared in. */
-#define MB_INPUT_MSG 4
+/* Every message on this socket is eight bytes: a tag and seven of payload.
+ * Fixed width because more than one kind of device listens here - buttons, a
+ * keyboard, a touch panel - and each has to be able to skip what is not its
+ * own without knowing how long it was.
+ *
+ * For a button the payload is the pin and the level. The pin rather than an
+ * index into the list, so the sender never has to keep in step with the order
+ * the lines were declared in. */
+#define MB_INPUT_MSG 8
 #define MB_INPUT_TAG 'B'
 
 struct MBInputState {
