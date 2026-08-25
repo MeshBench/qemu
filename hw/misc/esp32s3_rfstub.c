@@ -112,6 +112,15 @@ static const RfWait rf_waits[] = {
      * meanings overlap in the hardware and there is no separating them here. */
     { 0x6000E000, 0x04C, 1u << 24, 0 },
 
+    /* And the same command register one slot down, which a newer PHY uses
+     * instead. Measured on mesh-rs, an ESP-IDF v5.5 build: it clears the low
+     * bits of 0x6000E040, ORs in a command, stores it and then spins with the
+     * same 0x01000000 mask - the loop at 0x42254d3f with its register from
+     * the literal at 0x42230170 and its mask from 0x4222fefc. Identical
+     * convention, one register along, and the board sat in that loop for as
+     * long as it was left running. */
+    { 0x6000E000, 0x040, 1u << 24, 0 },
+
     /* Where rc_cal waits for its analog read or write to land - the register
      * that read fifteen million times before anything answered it. Which bit
      * means finished is not established; every high bit is set, and the low

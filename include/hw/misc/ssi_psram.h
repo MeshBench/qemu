@@ -24,9 +24,16 @@ typedef struct SsiPsramState {
     SSIPeripheral parent_obj;
     uint32_t size_mbytes;
     uint32_t dummy;
-    int command;
-    int addr;
-    int byte_count;
+    uint32_t command;
+    /*
+     * The address as the part sees it: 32 bits, unsigned. It was signed, and
+     * an address with the top bit set - which the tuning the ESP-IDF v5.5
+     * bootloader runs against octal PSRAM produces - came out negative. The
+     * bounds check only tested the upper end, a negative index passed it, and
+     * the read landed before the buffer.
+     */
+    uint32_t addr;
+    uint32_t byte_count;
     int dummy_cycles;
     bool is_octal;
 

@@ -142,13 +142,18 @@ static void esp32s3_usj_write(void *opaque, hwaddr addr, uint64_t value,
 
     switch (addr) {
     case A_EP1:
+        /*
+         * A full endpoint is sent on rather than dropped, because this model
+         * has already told the driver there is room: EP1_CONF reports the
+         * endpoint free at all times, on the grounds that the host here takes
+         * everything immediately. A driver that believes that writes straight
+         * past sixty-four bytes without flushing, and dropping the rest
+         * truncated every long line the bootloader printed - the partition
+         * table came out with its columns cut off, which reads as an emulator
+         * mangling output rather than as a full FIFO.
+         */
         if (fifo8_is_full(&s->in_fifo)) {
-            /*
-             * A driver that overruns the endpoint on real hardware loses the
-             * byte, so losing it here is the honest answer rather than growing
-             * the buffer and pretending the part is bigger than it is.
-             */
-            break;
+            esp32s3_usj_flush(s);
         }
         fifo8_push(&s->in_fifo, (uint8_t)value);
         break;

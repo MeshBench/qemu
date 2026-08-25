@@ -424,8 +424,21 @@ static void esp_t0_config_update(ESPT0State* t0, uint32_t value)
         esp_t0_update_counter(t0);
     }
 
-    /* Calculate the new frequency */
-    const uint32_t new_divider = FIELD_EX32(value, TIMG_T0CONFIG, DIVIDER);
+    /* Calculate the new frequency.
+     *
+     * A divider of zero is not zero: the field is sixteen bits and the part
+     * reads an all-zero one as the full 65536, which is what a driver writing
+     * zero is asking for. Taken literally it is a division by zero, and that
+     * is a signal, not a wrong number - it killed the emulator outright from
+     * inside a register write. The watchdog beside this has guarded against
+     * the same thing since it was written; the timer had not.
+     *
+     * Measured on mesh-rs, whose application writes a zero divider within a
+     * second of starting. */
+    uint32_t new_divider = FIELD_EX32(value, TIMG_T0CONFIG, DIVIDER);
+    if (new_divider == 0) {
+        new_divider = 65536;
+    }
     const uint64_t new_clk = FIELD_EX32(value, TIMG_T0CONFIG, USE_XTAL) ? ESP_XTAL_CLK : ESP_APB_CLK;
     const uint64_t new_freq = new_clk / new_divider;
     if (new_freq != t0->counter.frequency) {

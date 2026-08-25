@@ -128,6 +128,36 @@ static void esp_rsa_exp_mod(ESPRsaState *s, uint32_t mode_reg, uint32_t *x_mem, 
         goto error_y;
     }
 
+    /*
+     * A modulus of zero is not an operation, and libgcrypt does not treat it
+     * as one: gcry_mpi_powm aborts the process on it, taking the whole
+     * emulator down with a message about dividing by zero that names nothing
+     * a person could act on.
+     *
+     * The guest reaches this honestly. The Digital Signature peripheral keeps
+     * its key in eFuse and no key is burnt here, so what it decrypts is not a
+     * key and the modulus it hands over is zero - and a firmware that tries
+     * a signature it cannot make should get a wrong answer, which is what
+     * hardware would give it, rather than the emulator exiting. Measured on
+     * mesh-rs, which reaches this within a second of its application
+     * starting.
+     */
+    if (gcry_mpi_cmp_ui(m, 0) == 0) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "[RSA] exponentiation with a zero modulus; answering zero\n");
+        z = gcry_mpi_new(n_bytes * 8);
+        gcry_mpi_set_ui(z, 0);
+        mpi_gcrypt_to_block(z, class->rsa_mem_blk_size, z_mem);
+        if (int_ena) {
+            qemu_set_irq(s->irq, 1);
+        }
+        gcry_mpi_release(m);
+        gcry_mpi_release(z);
+        gcry_mpi_release(y);
+        gcry_mpi_release(x);
+        return;
+    }
+
     /* calculate the result and write it back */
     z = gcry_mpi_new(n_bytes * 8);
     gcry_mpi_powm(z, x, y, m);
