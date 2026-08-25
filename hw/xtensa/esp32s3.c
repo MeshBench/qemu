@@ -1144,6 +1144,18 @@ static void esp32s3_machine_init(MachineState *machine)
 
     {
         Esp32s3MachineState *mach = ESP32S3_MACHINE(OBJECT(machine));
+        /* The peripherals below hang off the controller the board names; this
+         * points the other one at the same bus, because on these boards there
+         * is one bus. The radio, the display and the card slot share the same
+         * pins in copper and the GPIO matrix routes whichever controller the
+         * firmware picked onto them - so a board answered only the firmware
+         * that happened to pick the same controller as the image its wiring
+         * was verified against. */
+        if (mach->radio_spi == 3) {
+            esp32s3_gpspi_share_bus(&ss->gpspi2, &ss->gpspi3);
+        } else {
+            esp32s3_gpspi_share_bus(&ss->gpspi3, &ss->gpspi2);
+        }
         if (mach->radio_path) {
             esp32s3_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
                                        mach->radio_cs, mach->radio_nss,

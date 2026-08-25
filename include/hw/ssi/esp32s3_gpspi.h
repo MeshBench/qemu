@@ -72,3 +72,5 @@ typedef struct ESP32S3GpspiState {
     uint32_t dma_conf;
     uint32_t data_reg[ESP32S3_GPSPI_BUF_WORDS];
 } ESP32S3GpspiState;
+
+void esp32s3_gpspi_share_bus(ESP32S3GpspiState *from, ESP32S3GpspiState *onto);

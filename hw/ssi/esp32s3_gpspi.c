@@ -193,6 +193,18 @@ static void esp32s3_gpspi_reset_hold(Object *obj, ResetType type)
     memset(s->data_reg, 0, sizeof(s->data_reg));
 }
 
+/* esp32s3_gpspi_share_bus points one controller at another's peripherals.
+ *
+ * For a board whose radio, display and card slot are one bus in copper: the
+ * GPIO matrix routes whichever controller the firmware picked onto those pins,
+ * so the devices must answer either one. The bus stays owned by the controller
+ * that created it.
+ */
+void esp32s3_gpspi_share_bus(ESP32S3GpspiState *from, ESP32S3GpspiState *onto)
+{
+    from->spi = onto->spi;
+}
+
 static void esp32s3_gpspi_init(Object *obj)
 {
     ESP32S3GpspiState *s = ESP32S3_GPSPI(obj);

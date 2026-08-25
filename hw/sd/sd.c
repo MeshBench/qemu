@@ -1574,10 +1574,31 @@ static sd_rsp_type_t emmc_cmd_SEND_EXT_CSD(SDState *sd, SDRequest req)
                                  sd->ext_csd, sizeof(sd->ext_csd));
 }
 
+/*
+ * spi_state_can_send reports whether a card in SPI mode may answer a register
+ * read.
+ *
+ * SPI mode has no standby/transfer distinction to move between: the card is
+ * idle until initialisation finishes and usable afterwards. Our own
+ * initialisation says so - spi_cmd_SEND_OP_COND puts the card straight into
+ * sd_transfer_state - so a SPI handler that insists on sd_standby_state can
+ * never be satisfied, and CMD9 and CMD10 answered "illegal command" for the
+ * whole life of every SPI card.
+ *
+ * That is not a hypothetical. A host that has just finished ACMD41 asks for
+ * the CSD to learn the card's size; told the command is illegal, it concludes
+ * the card is broken and stops - several layers away from anything that would
+ * mention a state machine.
+ */
+static bool spi_state_can_send(SDState *sd)
+{
+    return sd->state == sd_standby_state || sd->state == sd_transfer_state;
+}
+
 /* CMD9 */
 static sd_rsp_type_t spi_cmd_SEND_CSD(SDState *sd, SDRequest req)
 {
-    if (sd->state != sd_standby_state) {
+    if (!spi_state_can_send(sd)) {
         return sd_invalid_state_for_cmd(sd, req);
     }
     return sd_cmd_to_sendingdata(sd, req, sd_req_get_address(sd, req),
@@ -1596,7 +1617,7 @@ static sd_rsp_type_t sd_cmd_SEND_CSD(SDState *sd, SDRequest req)
 /* CMD10 */
 static sd_rsp_type_t spi_cmd_SEND_CID(SDState *sd, SDRequest req)
 {
-    if (sd->state != sd_standby_state) {
+    if (!spi_state_can_send(sd)) {
         return sd_invalid_state_for_cmd(sd, req);
     }
     return sd_cmd_to_sendingdata(sd, req, sd_req_get_address(sd, req),
