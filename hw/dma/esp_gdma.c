@@ -277,7 +277,15 @@ bool esp_gdma_get_channel_periph(ESPGdmaState *s, GdmaPeripheral periph, int dir
     for (int i = 0; i < class->m_channel_count; i++) {
         /* IN/OUT PERI registers have the same organization, can use any macro.
          * Look for the channel that was configured with the given peripheral. It must be marked as "started" too */
-        if ( FIELD_EX32(s->ch_conf[dir][i].peripheral, GDMA_PERI_SEL, PERI_SEL) == periph ||
+        /* The peripheral must match AND the channel must be started. This was
+         * an OR, so it returned the first channel whose peripheral matched
+         * whether or not a transfer had been armed on it - and since a
+         * channel's peripheral select resets to 0 (SPI2), a lookup for SPI2
+         * always got channel 0, never the channel a driver had actually put a
+         * descriptor on. The AES path never noticed because it arms one
+         * channel; an SPI display driver that uses a different channel got a
+         * descriptor error and its transfer never completed. */
+        if ( FIELD_EX32(s->ch_conf[dir][i].peripheral, GDMA_PERI_SEL, PERI_SEL) == periph &&
              FIELD_EX32(s->ch_conf[dir][i].link, GDMA_OUT_LINK, START)) {
 
             *chan = i;
@@ -889,7 +897,7 @@ uint64_t esp_gdma_read_chan_register(ESPGdmaState* state, uint32_t dir, uint32_t
     switch (reg) {
         /* Interrupt related */
         case GDMA_INT_RAW_REG:          return s->int_state.raw;
-        case GDMA_INT_ST_REG:           return s->int_state.st;
+        case GDMA_INT_ST_REG:
         case GDMA_INT_ENA_REG:          return s->int_state.ena;
 
         /* Configuration related */

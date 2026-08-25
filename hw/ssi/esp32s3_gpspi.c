@@ -33,6 +33,47 @@ static unsigned bitlen_to_bytes(uint32_t bitlen)
 }
 
 /* Clock one byte out and take one back, on the bus this controller owns. */
+/* esp32s3_gpspi_run_dma moves a DMA transfer's data phase between the GDMA
+ * channel bound to this controller and the SPI bus.
+ *
+ * Length comes from SPI_MS_DLEN, which the driver programs with the transfer's
+ * bit count. TX pulls from the OUT channel (memory->peripheral) and clocks it
+ * out; RX writes what came back to the IN channel (peripheral->memory). Both
+ * esp_gdma_read_channel and esp_gdma_write_channel set the channel's
+ * end-of-list status, which raises the GDMA interrupt the driver waits on, so
+ * no separate completion signal is needed here.
+ */
+static void esp32s3_gpspi_run_dma(ESP32S3GpspiState *s)
+{
+    const bool tx = FIELD_EX32(s->dma_conf, GPSPI_DMA_CONF, DMA_TX_ENA);
+    const bool rx = FIELD_EX32(s->dma_conf, GPSPI_DMA_CONF, DMA_RX_ENA);
+    uint32_t size = bitlen_to_bytes(
+        FIELD_EX32(s->ms_dlen, GPSPI_MS_DLEN, MS_DATA_BITLEN) + 1);
+    if (size == 0) {
+        return;
+    }
+    /* A bound, so a firmware that leaves MS_DLEN stale cannot make the model
+     * allocate the world; a real display line or DMA chunk is well under it. */
+    if (size > (1u << 20)) {
+        size = 1u << 20;
+    }
+
+    g_autofree uint8_t *data = g_malloc0(size);
+    uint32_t chan;
+
+    if (tx && esp_gdma_get_channel_periph(s->gdma, s->dma_peri,
+                                          ESP_GDMA_OUT_IDX, &chan)) {
+        esp_gdma_read_channel(s->gdma, chan, data, size);
+    }
+    for (uint32_t i = 0; i < size; i++) {
+        data[i] = ssi_transfer(s->spi, tx ? data[i] : 0) & 0xff;
+    }
+    if (rx && esp_gdma_get_channel_periph(s->gdma, s->dma_peri,
+                                          ESP_GDMA_IN_IDX, &chan)) {
+        esp_gdma_write_channel(s->gdma, chan, data, size);
+    }
+}
+
 static void esp32s3_gpspi_run(ESP32S3GpspiState *s)
 {
     uint8_t buf[ESP32S3_GPSPI_BUF_WORDS * 4];
@@ -60,6 +101,20 @@ static void esp32s3_gpspi_run(ESP32S3GpspiState *s)
     }
     for (unsigned i = 0; i < bytes; i++) {
         ssi_transfer(s->spi, buf[i]);
+    }
+
+    /* A transfer the driver set up through GDMA takes its data from, and
+     * returns it to, the DMA channel bound to this controller - not the CPU
+     * data registers. esp-hal's ST7789 driver blits the framebuffer this way
+     * and then sleeps on the GDMA end-of-list interrupt; with the data left in
+     * the W0..W15 registers untouched it clocked nothing and waited for ever.
+     * The MeshCore builds drive the same panel with polled Arduino SPI, which
+     * is why they draw and this did not. */
+    if (s->gdma != NULL &&
+        (FIELD_EX32(s->dma_conf, GPSPI_DMA_CONF, DMA_TX_ENA) ||
+         FIELD_EX32(s->dma_conf, GPSPI_DMA_CONF, DMA_RX_ENA))) {
+        esp32s3_gpspi_run_dma(s);
+        return;
     }
 
     unsigned data = 0;

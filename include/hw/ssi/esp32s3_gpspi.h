@@ -14,6 +14,7 @@
 #include "hw/hw.h"
 #include "hw/registerfields.h"
 #include "hw/ssi/ssi.h"
+#include "hw/dma/esp_gdma.h"
 
 #define TYPE_ESP32S3_GPSPI "ssi.esp32s3.gpspi"
 #define ESP32S3_GPSPI(obj) \
@@ -48,6 +49,12 @@ REG32(GPSPI_MS_DLEN, 0x01C)
     FIELD(GPSPI_MS_DLEN, MS_DATA_BITLEN, 0, 18)
 REG32(GPSPI_MISC, 0x020)
 REG32(GPSPI_DMA_CONF, 0x030)
+    /* The two bits ESP-IDF sets to route a transfer through GDMA rather than
+     * the CPU data registers. Present since forever on this part; unmodelled
+     * here until a DMA-only display driver (esp-hal's) waited on a transfer
+     * that never moved. */
+    FIELD(GPSPI_DMA_CONF, DMA_RX_ENA, 27, 1)
+    FIELD(GPSPI_DMA_CONF, DMA_TX_ENA, 28, 1)
 REG32(GPSPI_DMA_INT_ENA, 0x034)
 /*
  * 0x038 and 0x03C keep the meanings this model has always given them, and
@@ -72,6 +79,12 @@ typedef struct ESP32S3GpspiState {
     MemoryRegion iomem;
     SSIBus *spi;
     qemu_irq cs_gpio[ESP32S3_GPSPI_CS_COUNT];
+    /* The general DMA controller and which peripheral id this SPI is on it
+     * (GDMA_SPI2 or GDMA_SPI3). A transfer with DMA enabled takes its data
+     * from, and returns it to, the GDMA channel bound to that id rather than
+     * the CPU data registers. Null on a machine wired without GDMA. */
+    ESPGdmaState *gdma;
+    int dma_peri;
     /* The line into the interrupt matrix, and what is armed and pending on it.
      * A driver that arms the transfer-done interrupt and sleeps has nothing
      * else to wake it. */

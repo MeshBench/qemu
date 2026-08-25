@@ -1046,6 +1046,15 @@ static void esp32s3_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ss->gdma), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gdma), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GDMA_BASE, mr, 0);
+
+        /* Let each general-purpose SPI controller reach the GDMA, and tell it
+         * which peripheral id it is on: a DMA transfer's data then flows
+         * through the channel the driver bound to it. Both share one bus in
+         * copper (see above), but they are distinct DMA peripherals. */
+        ss->gpspi2.gdma = ESP_GDMA(&ss->gdma);
+        ss->gpspi2.dma_peri = GDMA_SPI2;
+        ss->gpspi3.gdma = ESP_GDMA(&ss->gdma);
+        ss->gpspi3.dma_peri = GDMA_SPI3;
         /* Connect the IRQs to the Interrupt Matrix */
         for (int i = 0; i < ESP32S3_GDMA_CHANNEL_COUNT; i++) {
             qdev_connect_gpio_out_named(DEVICE(&ss->gdma), ESP_GDMA_IRQ_IN_NAME, i,
