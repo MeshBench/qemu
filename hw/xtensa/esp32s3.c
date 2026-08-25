@@ -174,6 +174,8 @@ typedef struct Esp32s3SocState {
     SsiPsramState *psram;
 
     uint32_t requested_reset;
+    /* The SYSTEM block's hold on core 1: in reset, clock-gated or stalled. */
+    bool core1_held;
 } Esp32s3SocState;
 
 
@@ -242,8 +244,37 @@ static void esp32s3_soc_reset(DeviceState *dev)
     s->requested_reset = 0;
 }
 
+/*
+ * Whether a core may run.
+ *
+ * Core 1 comes up held - in reset, with its clock gated - exactly as the part
+ * does, and runs when the firmware says so. It used to run from the moment the
+ * machine started, which put it in the ROM's "wait for somewhere to jump" loop
+ * before anything had a jump to give it, so it took the first word written to
+ * the message register whatever that word was. A firmware that uses that
+ * register for a message before it starts a core then sent its second core
+ * into a peripheral, and the panic that followed named the firmware.
+ */
 static void esp32s3_cpu_stall(void* opaque, int n, int level)
 {
+    /* The RTC's own stall lines are still not acted on. Left alone rather than
+     * wired up while passing: nothing here has ever depended on them, and a
+     * core that stops for a reason nobody was expecting is a worse fault than
+     * one that never stops. */
+}
+
+/* The SYSTEM block's hold on core 1: in reset, clock-gated, or stalled. */
+static void esp32s3_core1_hold(void* opaque, int n, int level)
+{
+    Esp32s3SocState *s = ESP32S3_SOC(opaque);
+
+    if (ESP32S3_CPU_COUNT < 2) {
+        return;
+    }
+    s->core1_held = level != 0;
+    if (s->core1_held != s->cpu[1].env.runstall) {
+        xtensa_runstall(&s->cpu[1].env, s->core1_held);
+    }
 }
 
 static void esp32s3_clk_update(void* opaque, int n, int level)
@@ -686,6 +717,8 @@ static void esp32s3_soc_init(Object *obj)
     qdev_init_gpio_in_named(DEVICE(s), esp32s3_dig_reset,  ESP32S3_RTC_DIG_RESET_GPIO, 1);
     qdev_init_gpio_in_named(DEVICE(s), esp32s3_cpu_reset,  ESP32S3_RTC_CPU_RESET_GPIO, ESP32S3_CPU_COUNT);
     qdev_init_gpio_in_named(DEVICE(s), esp32s3_cpu_stall,  ESP32S3_RTC_CPU_STALL_GPIO, ESP32S3_CPU_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), esp32s3_core1_hold,
+                            ESP32S3_CLOCK_CORE1_STALL_GPIO, 1);
     qdev_init_gpio_in_named(DEVICE(s), esp32s3_clk_update, ESP32S3_RTC_CLK_UPDATE_GPIO, 1);
 
     object_initialize_child(obj, "twai", &s->twai, TYPE_ESP32S3_TWAI);
@@ -904,6 +937,10 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* System clock realization */
     {
+        qdev_connect_gpio_out_named(DEVICE(&ss->clock),
+                                    ESP32S3_CLOCK_CORE1_STALL_GPIO, 0,
+                                    qdev_get_gpio_in_named(DEVICE(ss),
+                                        ESP32S3_CLOCK_CORE1_STALL_GPIO, 0));
         sysbus_realize(SYS_BUS_DEVICE(&ss->clock), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->clock), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_SYSTEM_BASE, mr, 0);

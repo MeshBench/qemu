@@ -129,33 +129,66 @@ static const RfWait rf_waits[] = {
     { 0x6000E000, 0x050, 0xFFFFFF00, 0 },
 };
 
-static uint64_t esp32s3_rfstub_read(void *opaque, hwaddr addr, unsigned int size)
+/* The whole word behind an address, wait table applied. */
+static uint32_t rfstub_word(Esp32s3RfStubState *s, hwaddr word_off)
 {
-    Esp32s3RfStubState *s = ESP32S3_RFSTUB(opaque);
-    uint32_t v = s->reg[addr / 4];
+    uint32_t v = s->reg[word_off / 4];
 
     for (size_t i = 0; i < ARRAY_SIZE(rf_waits); i++) {
-        if (rf_waits[i].base == s->base && rf_waits[i].off == addr) {
+        if (rf_waits[i].base == s->base && rf_waits[i].off == word_off) {
             return (v | rf_waits[i].set) & ~rf_waits[i].clear;
         }
     }
     return v;
 }
 
+static uint64_t esp32s3_rfstub_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32s3RfStubState *s = ESP32S3_RFSTUB(opaque);
+    const hwaddr word_off = addr & ~(hwaddr)3;
+    const unsigned shift = (addr & 3) * 8;
+
+    return (rfstub_word(s, word_off) >> shift) & ((size >= 4) ? 0xFFFFFFFFu
+                                                              : (1u << (size * 8)) - 1);
+}
+
 static void esp32s3_rfstub_write(void *opaque, hwaddr addr, uint64_t value,
                                  unsigned int size)
 {
     Esp32s3RfStubState *s = ESP32S3_RFSTUB(opaque);
+    const hwaddr word_off = addr & ~(hwaddr)3;
+    const unsigned shift = (addr & 3) * 8;
 
-    s->reg[addr / 4] = (uint32_t)value;
+    if (size >= 4) {
+        s->reg[word_off / 4] = (uint32_t)value;
+        return;
+    }
+    /* Read-modify-write, which is what the part does for a narrow store and
+     * what a byte-at-a-time driver depends on. */
+    const uint32_t mask = ((1u << (size * 8)) - 1) << shift;
+    s->reg[word_off / 4] = (s->reg[word_off / 4] & ~mask) |
+                           (((uint32_t)value << shift) & mask);
 }
 
+/*
+ * Bytes and halves as well as words.
+ *
+ * These registers were word-only, and a narrower access is not a slower
+ * access: QEMU refuses it, the guest takes a LoadStoreError, and on a firmware
+ * whose handler then faults on its own stack that is an unending storm of
+ * double exceptions with nothing printed. Measured on mesh-rs, which reads
+ * 0x60006090 with l8ui, masks a bit out and writes it back with s8i - a
+ * perfectly ordinary read-modify-write on a peripheral byte, and the whole
+ * reason that firmware never reached its application on this machine.
+ */
 static const MemoryRegionOps esp32s3_rfstub_ops = {
     .read = esp32s3_rfstub_read,
     .write = esp32s3_rfstub_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 4,
+    .valid.min_access_size = 1,
     .valid.max_access_size = 4,
+    .impl.min_access_size = 1,
+    .impl.max_access_size = 4,
 };
 
 static void esp32s3_rfstub_init(Object *obj)

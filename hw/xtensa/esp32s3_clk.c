@@ -46,12 +46,37 @@ static uint32_t esp32s3_clock_get_ext_dev_enc_dec_ctrl(ESP32S3ClockState *s)
     return s->sys_ext_dev_enc_dec_ctrl;
 }
 
+/*
+ * Whether the second core may run, and telling the machine so.
+ *
+ * It comes up in reset with its clock gated, exactly as the part does - the
+ * RESETING bit's reset value is 1 - and the firmware clears those when it has
+ * an entry point to give it. Modelling that is not tidiness: the core was
+ * running from the moment the machine started, so it sat in the ROM's own
+ * "wait for somewhere to jump" loop and took the very first thing written to
+ * the message register, whatever that was and whoever wrote it. On a firmware
+ * that uses the register for a message before it starts anything, the second
+ * core jumped into a peripheral and the whole system panicked - measured on
+ * mesh-rs, which writes 0x600C0110 there long before it starts a core.
+ */
+static void esp32s3_clock_set_core1_control(ESP32S3ClockState *s, uint32_t value)
+{
+    s->core1_control0 = value;
+    const bool held = (value & R_SYSTEM_CORE_1_CONTROL_0_REG_CONTROL_CORE_1_RESETING_MASK) ||
+                      !(value & R_SYSTEM_CORE_1_CONTROL_0_REG_CONTROL_CORE_1_CLKGATE_EN_MASK) ||
+                      (value & R_SYSTEM_CORE_1_CONTROL_0_REG_CONTROL_CORE_1_RUNSTALL_MASK);
+    qemu_set_irq(s->core1_stall, held);
+}
+
 static uint64_t esp32s3_clock_read(void *opaque, hwaddr addr, unsigned int size)
 {
     ESP32S3ClockState *s = ESP32S3_CLOCK(opaque);
     uint64_t r = 0;
 
     switch(addr) {
+        case A_SYSTEM_CORE_1_CONTROL_0_REG:
+            r = s->core1_control0;
+            break;
         case A_SYSTEM_CORE_1_CONTROL_1_REG:
                 r = s->app_cpu_addr;
             break;
@@ -77,9 +102,9 @@ static uint64_t esp32s3_clock_read(void *opaque, hwaddr addr, unsigned int size)
             r = s->bt_lpck_div_frac;
             break;
         default:
-#if CLOCK_WARNING
-            warn_report("[CLOCK] Unsupported read from %08lx\n", addr);
-#endif
+            /* Whatever the guest last put there. Not modelled, but remembered:
+             * see ESP32S3ClockState.other. */
+            r = s->other[addr / sizeof(uint32_t)];
             break;
     }
     return r;
@@ -91,6 +116,9 @@ static void esp32s3_clock_write(void *opaque, hwaddr addr, uint64_t value,
     ESP32S3ClockState *s = ESP32S3_CLOCK(opaque);
 
     switch(addr) {
+        case A_SYSTEM_CORE_1_CONTROL_0_REG:
+                esp32s3_clock_set_core1_control(s, (uint32_t)value);
+            break;
         case A_SYSTEM_CORE_1_CONTROL_1_REG:
                 s->app_cpu_addr = (uint32_t)value;
             break;
@@ -110,9 +138,9 @@ static void esp32s3_clock_write(void *opaque, hwaddr addr, uint64_t value,
             s->bt_lpck_div_frac = (uint32_t)value;
             break;
         default:
-#if CLOCK_WARNING
-            warn_report("[CLOCK] Unsupported write to %08lx (%08lx)\n", addr, value);
-#endif
+            /* Kept rather than dropped: the guest reads these back and builds
+             * on what it finds. See ESP32S3ClockState.other. */
+            s->other[addr / sizeof(uint32_t)] = (uint32_t)value;
             break;
     }
 }
@@ -136,6 +164,9 @@ static void esp32s3_clock_reset_hold(Object *obj, ResetType type)
     s->cpuperconf = (ESP32S3_PERIOD_SEL_80 << R_SYSTEM_CPU_PER_CONF_CPUPERIOD_SEL_SHIFT) |
                     (ESP32S3_FREQ_SEL_PLL_480 << R_SYSTEM_CPU_PER_CONF_PLL_FREQ_SEL_SHIFT);
 
+    /* And the second core held, which is the RESETING bit's own reset value. */
+    esp32s3_clock_set_core1_control(s, R_SYSTEM_CORE_1_CONTROL_0_REG_CONTROL_CORE_1_RESETING_MASK);
+
     /* Initialize the IRQs */
     s->levels = 0;
     for (int i = 0 ; i < ESP32S3_SYSTEM_CPU_INTR_COUNT; i++) {
@@ -155,8 +186,13 @@ static void esp32s3_clock_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, obj, &esp32s3_clock_ops, s,
-                          TYPE_ESP32S3_CLOCK, A_SYSTEM_COMB_PVT_ERR_HVT_SITE3 + sizeof(uint32_t));
+                          TYPE_ESP32S3_CLOCK, ESP32S3_CLOCK_REGS_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
+
+    /* Whether the second core may run. Its reset value holds it, which is
+     * what the part does. */
+    qdev_init_gpio_out_named(DEVICE(obj), &s->core1_stall,
+                             ESP32S3_CLOCK_CORE1_STALL_GPIO, 1);
 
     /* Initialize the output IRQ lines used to manually trigger interrupts */
     for (uint64_t i = 0; i < ESP32S3_SYSTEM_CPU_INTR_COUNT; i++) {

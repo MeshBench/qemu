@@ -41,6 +41,14 @@
 #define ESP32S3_PERIOD_SEL_160      1
 
 
+/* The whole SYSTEM register block: 0x0A0 is the last register the defs name,
+ * and this covers it and everything below. Kept as a literal because this
+ * header is included before the generated definitions are. */
+#define ESP32S3_CLOCK_REGS_SIZE 0x0A4
+
+/* The line the SYSTEM block holds the second core with. */
+#define ESP32S3_CLOCK_CORE1_STALL_GPIO "core1-stall"
+
 typedef struct ESP32S3ClockState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
@@ -57,6 +65,13 @@ typedef struct ESP32S3ClockState {
     uint32_t levels;
     
     uint32_t app_cpu_addr;
+    /*
+     * SYSTEM_CORE_1_CONTROL_0: whether the second core is in reset, whether
+     * its clock is gated, and whether it is stalled. All three come up holding
+     * it, as the part does, and the firmware releases it when it is ready.
+     */
+    uint32_t core1_control0;
+    qemu_irq core1_stall;
     
     uint32_t sys_ext_dev_enc_dec_ctrl;
 
@@ -70,6 +85,17 @@ typedef struct ESP32S3ClockState {
      * instead of coming up without it. */
     uint32_t bt_lpck_div_int;
     uint32_t bt_lpck_div_frac;
+    /*
+     * Everything else in the block, as plain storage.
+     *
+     * These are the peripheral clock-enable and reset registers, and this
+     * machine does not gate a clock or hold a peripheral in reset - but the
+     * guest sets bits in them one at a time, reading, or-ing and writing back.
+     * A register that reads zero and discards writes makes every one of those
+     * read-modify-writes a no-op, and the guest's picture of the chip diverges
+     * from the chip on the very first one.
+     */
+    uint32_t other[ESP32S3_CLOCK_REGS_SIZE / sizeof(uint32_t)];
 } ESP32S3ClockState;
 
 typedef struct ESP32S3ClockClass {
