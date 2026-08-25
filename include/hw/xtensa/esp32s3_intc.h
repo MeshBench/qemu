@@ -129,6 +129,13 @@ typedef enum {
 
 #define ESP32S3_INT_MATRIX_INPUTS (0x800/4)
 
+/* The four INTERRUPT_CORE0_INTR_STATUS_n_REG, immediately past the map
+ * registers: this part has 99 interrupt sources, so 99 * 4 = 0x18C. */
+#define ESP32S3_INTMATRIX_STATUS_REGS   4
+#define ESP32S3_INTMATRIX_STATUS_FIRST  0x18C
+#define ESP32S3_INTMATRIX_STATUS_LAST   \
+    (ESP32S3_INTMATRIX_STATUS_FIRST + ESP32S3_INTMATRIX_STATUS_REGS * 4)
+
 #define TYPE_ESP32S3_INTMATRIX "misc.esp32s3.intmatrix"
 #define ESP32S3_INTMATRIX(obj) OBJECT_CHECK(Esp32s3IntMatrixState, (obj), TYPE_ESP32S3_INTMATRIX)
 
@@ -142,6 +149,10 @@ typedef struct Esp32s3IntMatrixState {
     MemoryRegion iomem;
     qemu_irq *outputs[ESP32S3_CPU_COUNT];
     uint8_t irq_map[ESP32S3_CPU_COUNT][ESP32S3_INT_MATRIX_INPUTS];
+    /* Which sources are asserting right now, one bit each, as the four
+     * status registers report them. A firmware that dispatches its own
+     * interrupts reads these to find out who interrupted it. */
+    uint32_t status[ESP32S3_INTMATRIX_STATUS_REGS];
 
     /* properties */
     XtensaCPU *cpu[ESP32S3_CPU_COUNT];

@@ -233,10 +233,14 @@ void xtensa_cpu_do_interrupt(CPUState *cs)
     case EXC_DOUBLE:
     case EXC_DEBUG:
         qemu_log_mask(CPU_LOG_INT, "%s(%d) "
-                      "pc = %08x, a0 = %08x, ps = %08x, ccount = %08x\n",
+                      "pc = %08x, a0 = %08x, ps = %08x, ccount = %08x, "
+                      "exccause = %d, excvaddr = %08x, "
+                      "interrupt = %08x, intenable = %08x\n",
                       __func__, cs->exception_index,
                       env->pc, env->regs[0], env->sregs[PS],
-                      env->sregs[CCOUNT]);
+                      env->sregs[CCOUNT],
+                      env->sregs[EXCCAUSE], env->sregs[EXCVADDR],
+                      env->sregs[INTSET], env->sregs[INTENABLE]);
         if (env->config->exception_vector[cs->exception_index]) {
             uint32_t vector;
 

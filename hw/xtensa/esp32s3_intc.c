@@ -29,6 +29,14 @@
 static void esp32s3_intmatrix_irq_handler(void *opaque, int n, int level)
 {
     Esp32s3IntMatrixState *s = ESP32S3_INTMATRIX(opaque);
+    /* Remember who is asserting, for the status registers below. */
+    if (n / 32 < ESP32S3_INTMATRIX_STATUS_REGS) {
+        if (level) {
+            s->status[n / 32] |= 1u << (n % 32);
+        } else {
+            s->status[n / 32] &= ~(1u << (n % 32));
+        }
+    }
     for (int i = 0; i < ESP32S3_CPU_COUNT; ++i) {
         if (s->outputs[i] == NULL) {
             continue;
@@ -41,6 +49,31 @@ static void esp32s3_intmatrix_irq_handler(void *opaque, int n, int level)
             }
         }
     }
+}
+
+/* status_register_index reports which of the four status registers an address
+ * is, or -1 where it is a map register.
+ *
+ * They sit immediately past the map registers, and this model laid every
+ * address in its window out as a map entry - so a firmware reading the status
+ * to find out which peripheral had just interrupted it got a map byte back.
+ * Reading nothing it recognised, it dispatched to nothing: measured on mesh-rs
+ * as a jump to address zero from its own interrupt dispatcher, with a timer
+ * interrupt pending, several layers away from anything about interrupts.
+ *
+ * ESP-IDF never noticed because it dispatches from a per-CPU-interrupt handler
+ * table rather than by asking who fired.
+ */
+static inline int status_register_index(hwaddr addr)
+{
+    /* Each core's block is one ESP32S3_INT_MATRIX_INPUTS-sized window in this
+     * model, so the status registers repeat at the same offset within each. */
+    const hwaddr within = addr % (ESP32S3_INT_MATRIX_INPUTS * sizeof(uint32_t));
+    if (within >= ESP32S3_INTMATRIX_STATUS_FIRST &&
+        within < ESP32S3_INTMATRIX_STATUS_LAST) {
+        return (within - ESP32S3_INTMATRIX_STATUS_FIRST) / sizeof(uint32_t);
+    }
+    return -1;
 }
 
 static inline uint8_t* get_map_entry(Esp32s3IntMatrixState* s, hwaddr addr)
@@ -60,6 +93,13 @@ static inline uint8_t* get_map_entry(Esp32s3IntMatrixState* s, hwaddr addr)
 static uint64_t esp32s3_intmatrix_read(void* opaque, hwaddr addr, unsigned int size)
 {
     Esp32s3IntMatrixState *s = ESP32S3_INTMATRIX(opaque);
+    const int status = status_register_index(addr);
+    if (status >= 0) {
+        /* Reported to either core: this model cannot tell a source routed to
+         * one core from a source routed to both, and what a dispatcher needs
+         * is the source that just interrupted it. */
+        return s->status[status];
+    }
     uint8_t* map_entry = get_map_entry(s, addr);
     return (map_entry != NULL) ? *map_entry : 0;
 }
@@ -70,6 +110,10 @@ static void esp32s3_intmatrix_write(void* opaque, hwaddr addr, uint64_t value, u
     info_report("\x1b[31m[INTC] esp32s3_intmatrix_write  addr = %ld, value=%ld\x1b[0m", addr, value);
 #endif // INTC_DEBUG
     Esp32s3IntMatrixState *s = ESP32S3_INTMATRIX(opaque);
+    if (status_register_index(addr) >= 0) {
+        /* Read-only on the part: the sources say when they are done. */
+        return;
+    }
     uint8_t* map_entry = get_map_entry(s, addr);
     if (map_entry != NULL) {
         *map_entry = value & 0x1f;
@@ -86,6 +130,7 @@ static void esp32s3_intmatrix_reset_hold(Object *obj, ResetType type)
 {
     Esp32s3IntMatrixState *s = ESP32S3_INTMATRIX(obj);
     memset(s->irq_map, INTMATRIX_UNINT_VALUE, sizeof(s->irq_map));
+    memset(s->status, 0, sizeof(s->status));
     for (int i = 0; i < ESP32S3_CPU_COUNT; ++i) {
         if (s->outputs[i] == NULL) {
             continue;
