@@ -933,9 +933,14 @@ static void esp32s3_machine_init(MachineState *machine)
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi2), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE, mr, 0);
 
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpspi2), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_SPI2_INTR_SOURCE));
+
         sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi3), &error_fatal);
         MemoryRegion *mr3 = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi3), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI3_BASE, mr3, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpspi3), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_SPI3_INTR_SOURCE));
     }
 
     /* (Extmem) Cache realization */

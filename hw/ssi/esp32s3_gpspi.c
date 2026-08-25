@@ -98,6 +98,12 @@ static void esp32s3_gpspi_run(ESP32S3GpspiState *s)
     }
 }
 
+/* esp32s3_gpspi_update_irq drives the line from what is pending and armed. */
+static void esp32s3_gpspi_update_irq(ESP32S3GpspiState *s)
+{
+    qemu_set_irq(s->irq, (s->int_raw & s->int_ena) != 0);
+}
+
 static uint64_t esp32s3_gpspi_read(void *opaque, hwaddr addr, unsigned int size)
 {
     ESP32S3GpspiState *s = ESP32S3_GPSPI(opaque);
@@ -121,10 +127,20 @@ static uint64_t esp32s3_gpspi_read(void *opaque, hwaddr addr, unsigned int size)
     case A_GPSPI_MS_DLEN:  return s->ms_dlen;
     case A_GPSPI_MISC:     return s->misc;
     case A_GPSPI_DMA_CONF: return s->dma_conf;
-    /* Transfer-done, always set for the same reason USR reads back clear. */
+    case A_GPSPI_DMA_INT_ENA: return s->int_ena;
+    /*
+     * Transfer-done, always set for the same reason USR reads back clear: the
+     * transfer finishes inside the write that starts it.
+     *
+     * Bit 12 is the part's SPI_TRANS_DONE. Bit 4 is not - it was here first
+     * and is kept because something may have come to depend on it, but a
+     * driver polling this register for completion is looking at bit 12, and
+     * with only bit 4 set it waits for ever. mesh-rs clears exactly 0x1000
+     * here before each transfer and then watches for it to come back.
+     */
     case A_GPSPI_DMA_INT_RAW:
     case A_GPSPI_DMA_INT_ST:
-        return 1 << 4;
+        return (1 << 4) | GPSPI_INT_TRANS_DONE;
     case A_GPSPI_DATE:     return 0x2101040;
     default:
         qemu_log_mask(LOG_UNIMP, "esp32s3.gpspi: unimplemented read at 0x%02x\n",
@@ -151,6 +167,11 @@ static void esp32s3_gpspi_write(void *opaque, hwaddr addr, uint64_t value,
          * moves bytes. Writing both at once is allowed and does one transfer. */
         if (FIELD_EX32(v, GPSPI_CMD, USR)) {
             esp32s3_gpspi_run(s);
+            /* Finished by the time that returns - this model does the whole
+             * transfer inside the write that starts it - so the interrupt is
+             * pending immediately. */
+            s->int_raw |= GPSPI_INT_TRANS_DONE;
+            esp32s3_gpspi_update_irq(s);
         }
         break;
     case A_GPSPI_ADDR:     s->addr = v; break;
@@ -162,6 +183,16 @@ static void esp32s3_gpspi_write(void *opaque, hwaddr addr, uint64_t value,
     case A_GPSPI_MS_DLEN:  s->ms_dlen = v; break;
     case A_GPSPI_MISC:     s->misc = v; break;
     case A_GPSPI_DMA_CONF: s->dma_conf = v; break;
+    case A_GPSPI_DMA_INT_ENA:
+        s->int_ena = v;
+        esp32s3_gpspi_update_irq(s);
+        break;
+    /* Writing here clears, as the part does; reading it still reports
+     * transfer-done, as this model always has. */
+    case A_GPSPI_DMA_INT_RAW:
+        s->int_raw &= ~v;
+        esp32s3_gpspi_update_irq(s);
+        break;
     default:
         qemu_log_mask(LOG_UNIMP,
                       "esp32s3.gpspi: unimplemented write at 0x%02x = 0x%08x\n",
@@ -190,6 +221,8 @@ static void esp32s3_gpspi_reset_hold(Object *obj, ResetType type)
     s->ms_dlen = 0;
     s->misc = 0;
     s->dma_conf = 0;
+    s->int_ena = 0;
+    s->int_raw = 0;
     memset(s->data_reg, 0, sizeof(s->data_reg));
 }
 
@@ -217,6 +250,7 @@ static void esp32s3_gpspi_init(Object *obj)
     esp32s3_gpspi_reset_hold(obj, RESET_TYPE_COLD);
 
     s->spi = ssi_create_bus(DEVICE(s), "spi");
+    sysbus_init_irq(sbd, &s->irq);
     qdev_init_gpio_out_named(DEVICE(s), &s->cs_gpio[0], SSI_GPIO_CS,
                              ESP32S3_GPSPI_CS_COUNT);
 }

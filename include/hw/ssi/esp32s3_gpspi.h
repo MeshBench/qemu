@@ -48,8 +48,21 @@ REG32(GPSPI_MS_DLEN, 0x01C)
     FIELD(GPSPI_MS_DLEN, MS_DATA_BITLEN, 0, 18)
 REG32(GPSPI_MISC, 0x020)
 REG32(GPSPI_DMA_CONF, 0x030)
+REG32(GPSPI_DMA_INT_ENA, 0x034)
+/*
+ * 0x038 and 0x03C keep the meanings this model has always given them, and
+ * both keep reading back transfer-done. On the part 0x038 is the clear
+ * register and 0x03C the raw one, but a driver that polls here for completion
+ * has been served a done bit for as long as this machine has existed -
+ * MeshCore's own build is one, and correcting the offsets underneath it left
+ * its radio waiting for ever, three runs out of three. Writes to 0x038 clear,
+ * which is what the part does and what an interrupt-driven driver needs.
+ */
 REG32(GPSPI_DMA_INT_RAW, 0x038)
 REG32(GPSPI_DMA_INT_ST, 0x03C)
+/* Bit 12 of the interrupt registers: the transfer this controller was told to
+ * do has finished. The one interrupt an SPI master driver waits on. */
+#define GPSPI_INT_TRANS_DONE (1u << 12)
 REG32(GPSPI_W0, 0x098)
 REG32(GPSPI_DATE, 0x0F0)
 
@@ -59,6 +72,12 @@ typedef struct ESP32S3GpspiState {
     MemoryRegion iomem;
     SSIBus *spi;
     qemu_irq cs_gpio[ESP32S3_GPSPI_CS_COUNT];
+    /* The line into the interrupt matrix, and what is armed and pending on it.
+     * A driver that arms the transfer-done interrupt and sleeps has nothing
+     * else to wake it. */
+    qemu_irq irq;
+    uint32_t int_ena;
+    uint32_t int_raw;
 
     uint32_t cmd;
     uint32_t addr;
