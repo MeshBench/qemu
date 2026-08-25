@@ -71,7 +71,7 @@
 
 #include "cpu_esp32s3.h"
 
-#include "hw/misc/esp32c3_jtag.h"
+#include "hw/misc/esp32s3_usb_serial_jtag.h"
 #include "hw/display/esp_rgb.h"
 
 #define TYPE_ESP32S3_SOC "xtensa.esp32s3"
@@ -165,7 +165,7 @@ typedef struct Esp32s3SocState {
     ESP32S3TimgState timg[2];
     ESP32S3SysTimerState systimer;
 
-    ESP32C3UsbJtagState jtag;
+    ESP32S3UsbSerialJtagState jtag;
     ESPRgbState rgb;
 
     MemoryRegion iomem;
@@ -790,7 +790,8 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "gpspi2", &ss->gpspi2, TYPE_ESP32S3_GPSPI);
     object_initialize_child(OBJECT(ss), "gpspi3", &ss->gpspi3, TYPE_ESP32S3_GPSPI);
     object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
-    object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
+    object_initialize_child(OBJECT(ss), "jtag", &ss->jtag,
+                            TYPE_ESP32S3_USB_SERIAL_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
     object_initialize_child(OBJECT(ss), "rng", &ss->rng, TYPE_ESP32S3_RNG);
 
@@ -820,11 +821,24 @@ static void esp32s3_machine_init(MachineState *machine)
     /* Initialize OpenCores Ethernet controller now sicne it requires the interrupt matrix */
     esp32s3_init_openeth(ss);
 
-    /* USB Serial JTAG realization */
+    /*
+     * USB Serial/JTAG. A character device rather than the register stub it
+     * was: a board built with ARDUINO_USB_CDC_ON_BOOT has Serial here and not
+     * on UART0, so on those boards the application's whole console went into
+     * the stub and came out nowhere.
+     *
+     * Its backend is the third serial port, so a machine started with
+     * -serial chardev:con -serial chardev:gps -serial chardev:usb reaches it
+     * without a new machine property.
+     */
     {
+        qdev_prop_set_chr(DEVICE(&ss->jtag), "chardev", serial_hd(2));
         sysbus_realize(SYS_BUS_DEVICE(&ss->jtag), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->jtag), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_USB_SERIAL_JTAG_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->jtag), 0,
+                           qdev_get_gpio_in(intmatrix_dev,
+                                            ETS_USB_SERIAL_JTAG_INTR_SOURCE));
     }
 
     /* SPI1 controller (SPI Flash) */
