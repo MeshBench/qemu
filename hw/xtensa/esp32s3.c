@@ -176,6 +176,8 @@ typedef struct Esp32s3SocState {
     uint32_t requested_reset;
     /* The SYSTEM block's hold on core 1: in reset, clock-gated or stalled. */
     bool core1_held;
+    /* Whether the coprocessors come up enabled; see esp32s3_apply_cp_at_reset. */
+    bool cp_at_reset;
 } Esp32s3SocState;
 
 
@@ -219,6 +221,28 @@ static void esp32s3_cpu_reset(void* opaque, int n, int level)
     }
 }
 
+/*
+ * Bring the coprocessors up enabled, when asked, which the part does not.
+ *
+ * CPENABLE resets to zero on this architecture and the firmware decides which
+ * tasks may use the floating point unit. That is faithful, and it is also a
+ * dead end for one firmware here: its exception handler saves floating point
+ * state, so it reads FCR with the unit still disabled, takes a
+ * CoprocessorDisabled trap inside an exception vector - which is fatal - and
+ * loops there for ever. Nothing behind that point can be seen at all.
+ *
+ * Off by default and named for what it is. Turning it on makes the machine
+ * lie about a register in a way silicon does not, and the only reason it
+ * exists is that with it on, that firmware stops looping and reaches its own
+ * panic handler, which is a fault worth being able to look at.
+ */
+static void esp32s3_apply_cp_at_reset(Esp32s3SocState *s, int core)
+{
+    if (s->cp_at_reset && core < ESP32S3_CPU_COUNT) {
+        s->cpu[core].env.sregs[CPENABLE] = 0xff;
+    }
+}
+
 static void esp32s3_soc_reset(DeviceState *dev)
 {
     Esp32s3SocState *s = ESP32S3_SOC(dev);
@@ -235,11 +259,13 @@ static void esp32s3_soc_reset(DeviceState *dev)
         xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
         remove_cpu_watchpoints(&s->cpu[0]);
         cpu_reset(CPU(&s->cpu[0]));
+        esp32s3_apply_cp_at_reset(s, 0);
     }
     if (s->requested_reset & ESP32S3_SOC_RESET_APPCPU && (ESP32S3_CPU_COUNT > 1)) {
         xtensa_select_static_vectors(&s->cpu[1].env, s->rtc_cntl.stat_vector_sel[1]);
         remove_cpu_watchpoints(&s->cpu[1]);
         cpu_reset(CPU(&s->cpu[1]));
+        esp32s3_apply_cp_at_reset(s, 1);
     }
     s->requested_reset = 0;
 }
@@ -374,6 +400,8 @@ struct Esp32s3MachineState {
     DeviceState *flash_dev;
 
     bool psram_octal;
+    /* Whether the coprocessors come up enabled. Off, as the part is. */
+    bool cp_at_reset;
     char *radio_path;
     uint32_t radio_spi;
     /* The board's display, where it has one: which controller, on which I2C
@@ -887,6 +915,7 @@ static void esp32s3_machine_init(MachineState *machine)
             esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB),
                                        ESP32S3_MACHINE(OBJECT(machine))->psram_octal);
         }
+        ss->cp_at_reset = ESP32S3_MACHINE(OBJECT(machine))->cp_at_reset;
     }
 
     /* GPSPI2, the general-purpose controller a board puts a radio on. */
@@ -1395,6 +1424,16 @@ static void esp32s3_machine_class_init(ObjectClass *oc, void *data)
     mc->fixup_ram_size = esp32s3_fixup_ram_size;
 }
 
+static bool esp32s3_get_cp_at_reset(Object *obj, Error **errp)
+{
+    return ESP32S3_MACHINE(obj)->cp_at_reset;
+}
+
+static void esp32s3_set_cp_at_reset(Object *obj, bool value, Error **errp)
+{
+    ESP32S3_MACHINE(obj)->cp_at_reset = value;
+}
+
 static bool esp32s3_get_psram_octal(Object *obj, Error **errp)
 {
     return ESP32S3_MACHINE(obj)->psram_octal;
@@ -1477,6 +1516,14 @@ static void esp32s3_machine_instance_init(Object *obj)
     ms->panel_h = 240;
     ms->radio_fem = ESP32S3_RADIO_PIN_NONE;
     ms->psram_octal = false;
+    ms->cp_at_reset = false;
+    object_property_add_bool(obj, "cp-at-reset",
+                             esp32s3_get_cp_at_reset, esp32s3_set_cp_at_reset);
+    object_property_set_description(obj, "cp-at-reset",
+        "bring the coprocessors up enabled, which the part does not: a "
+        "debugging aid for firmware whose exception handler saves floating "
+        "point state before anything has enabled the FPU, where the trap that "
+        "causes is fatal and hides everything behind it");
     object_property_add_bool(obj, "psram-octal",
                              esp32s3_get_psram_octal, esp32s3_set_psram_octal);
     object_property_set_description(obj, "psram-octal",
