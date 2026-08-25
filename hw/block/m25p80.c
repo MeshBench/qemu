@@ -1014,7 +1014,12 @@ static void decode_fast_read_cmd(Flash *s)
         s->needed_bytes += 1;
         break;
     case MAN_WINBOND:
-        s->needed_bytes += 8;
+        /*
+         * One byte, not eight. The datasheet's eight dummy clocks are on a
+         * single line, which is eight bits: see the note on the dummy phase
+         * in decode_qio_read_cmd for why this file counts in bits here.
+         */
+        s->needed_bytes += 1;
         break;
     case MAN_NUMONYX:
         s->needed_bytes += numonyx_extract_cfg_num_dummies(s);
@@ -1112,8 +1117,22 @@ static void decode_qio_read_cmd(Flash *s)
     switch (get_man(s)) {
     case MAN_WINBOND:
     case MAN_GIGADEVICE:
+        /*
+         * The dummy phase, counted in bits. After the address a quad I/O read
+         * on these parts clocks the mode byte (two quad clocks) and four
+         * dummy clocks - six clocks on four lines, twenty-four bits, three
+         * bytes - which is what the ISSI branch below has always counted and
+         * what an ESP32-S3 controller configured for six dummy cycles sends.
+         *
+         * This branch counted one byte per dummy clock plus the mode byte,
+         * five, so a controller sending the physical three had its first two
+         * data transfers answered with the zeros this model returns while
+         * still collecting, and every byte the firmware read back arrived two
+         * places late. On the 8 MB boards that get a GigaDevice part here,
+         * that was every filesystem read.
+         */
         s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
-        s->needed_bytes += 4;
+        s->needed_bytes += 2;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;

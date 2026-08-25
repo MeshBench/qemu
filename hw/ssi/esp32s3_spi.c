@@ -212,18 +212,33 @@ static inline void esp32s3_spi_get_addr(ESP32S3SpiState *s, uint32_t* addr, uint
 
 static inline void esp32s3_spi_get_dummy(ESP32S3SpiState *s, uint32_t* len)
 {
-    const uint32_t dummy_count = FIELD_EX32(s->mem_user1, SPI_MEM_USER1, USR_DUMMY_CYCLELEN);
+    /* The register holds the cycle count less one on this part. */
+    const uint32_t cycles = FIELD_EX32(s->mem_user1, SPI_MEM_USER1, USR_DUMMY_CYCLELEN) + 1;
 
-    /* Dummy cycles are interpreted as bytes by the emulated SPI Flash. As such, we shall convert
-     * our dummy cycles count in bytes, rounding it up. For example:
-     * 0 cycles = 0 byte
-     * 1 cycle = 1 byte
-     * ...
-     * 8 cycles = 1 byte
-     * 9 cycles = 2 bytes
-     * etc..
+    /*
+     * The emulated flash counts its dummy phase in bytes, so the cycles have
+     * to become bytes here - and how many bits a cycle carries depends on the
+     * read the controller was configured for. A quad I/O read (EBh) clocks
+     * its dummy phase on all four lines, so six cycles are twenty-four bits;
+     * a dual I/O read (BBh) on two; everything else on one. The output-only
+     * fast reads (3Bh, 6Bh) widen the data phase, not the dummy one.
+     *
+     * Counted as one bit per cycle, six quad cycles became one byte where the
+     * flash expected three, and the flash answered the first two data
+     * transfers with the zeros it returns while still collecting - so every
+     * byte the firmware read back came two places late. An erased sector read
+     * as 00 00 ff ff..., a freshly written superblock read as garbage, and
+     * LittleFS and SPIFFS both refused to format on every ESP32-S3 board here.
+     * The application itself was untouched, because it executes through the
+     * cache, which reads the image directly and never goes this way.
      */
-    *len = (dummy_count + 7) / 8;
+    uint32_t width = 1;
+    if (FIELD_EX32(s->mem_ctrl, SPI_MEM_CTRL, FREAD_QIO)) {
+        width = 4;
+    } else if (FIELD_EX32(s->mem_ctrl, SPI_MEM_CTRL, FREAD_DIO)) {
+        width = 2;
+    }
+    *len = (cycles * width + 7) / 8;
 }
 
 static void esp32s3_spi_begin_transaction(ESP32S3SpiState *s)
