@@ -181,6 +181,9 @@ static uint64_t esp32s3_gpspi_read(void *opaque, hwaddr addr, unsigned int size)
     case A_GPSPI_USER2:    return s->user2;
     case A_GPSPI_MS_DLEN:  return s->ms_dlen;
     case A_GPSPI_MISC:     return s->misc;
+    case A_GPSPI_SLAVE:    return s->slave;
+    case A_GPSPI_CLK_GATE: return s->clk_gate;
+    case A_GPSPI_DMA_INT_SET: return 0;
     case A_GPSPI_DMA_CONF: return s->dma_conf;
     case A_GPSPI_DMA_INT_ENA: return s->int_ena;
     /*
@@ -237,6 +240,19 @@ static void esp32s3_gpspi_write(void *opaque, hwaddr addr, uint64_t value,
     case A_GPSPI_USER2:    s->user2 = v; break;
     case A_GPSPI_MS_DLEN:  s->ms_dlen = v; break;
     case A_GPSPI_MISC:     s->misc = v; break;
+    /* The SPI peripheral's own clock gate and slave-mode register: config a
+     * driver writes and reads back while bringing the controller up. Held
+     * rather than dropped, so the read-modify-write ESP-IDF does to enable the
+     * clock keeps the bits it set - without them the bus init cannot complete,
+     * and the SPI-master DMA setup that follows (the display's) never runs. */
+    case A_GPSPI_SLAVE:    s->slave = v; break;
+    case A_GPSPI_CLK_GATE: s->clk_gate = v; break;
+    /* Write-one-to-set of the DMA interrupt raw bits, the mirror of the
+     * write-one-to-clear below. */
+    case A_GPSPI_DMA_INT_SET:
+        s->int_raw |= v;
+        esp32s3_gpspi_update_irq(s);
+        break;
     case A_GPSPI_DMA_CONF: s->dma_conf = v; break;
     case A_GPSPI_DMA_INT_ENA:
         s->int_ena = v;

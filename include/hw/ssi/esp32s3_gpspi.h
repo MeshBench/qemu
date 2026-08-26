@@ -70,7 +70,10 @@ REG32(GPSPI_DMA_INT_ST, 0x03C)
 /* Bit 12 of the interrupt registers: the transfer this controller was told to
  * do has finished. The one interrupt an SPI master driver waits on. */
 #define GPSPI_INT_TRANS_DONE (1u << 12)
+REG32(GPSPI_DMA_INT_SET, 0x044)
 REG32(GPSPI_W0, 0x098)
+REG32(GPSPI_SLAVE, 0x0E0)
+REG32(GPSPI_CLK_GATE, 0x0E8)
 REG32(GPSPI_DATE, 0x0F0)
 
 typedef struct ESP32S3GpspiState {
@@ -101,6 +104,8 @@ typedef struct ESP32S3GpspiState {
     uint32_t user2;
     uint32_t ms_dlen;
     uint32_t misc;
+    uint32_t slave;
+    uint32_t clk_gate;
     uint32_t dma_conf;
     uint32_t data_reg[ESP32S3_GPSPI_BUF_WORDS];
 } ESP32S3GpspiState;
