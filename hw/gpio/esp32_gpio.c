@@ -132,18 +132,18 @@ static void esp32_gpio_latch_int(Esp32GpioState *s, int n, bool old_level,
         fire = old_level != level;
         break;
     case ESP32_GPIO_INT_LOW:
+        /* Level-triggered: pending while the pin holds the level, not on an
+         * edge. A level source re-asserts the instant a handler clears it and
+         * only drops when the peripheral releases the line - so the status is
+         * re-evaluated on every clear (see the STATUS writes) and the guest is
+         * responsible for de-asserting the cause, exactly as on the part. The
+         * SX1262's BUSY and DIO1 are wired this way, so a firmware that arms
+         * them as level - mesh-rs does - gets nothing without this. */
+        fire = !level;
+        break;
     case ESP32_GPIO_INT_HIGH:
-        /* Deliberately not modelled. A level-triggered source re-asserts the
-         * moment the handler clears it, so it needs the pin to be released
-         * before the line drops - and getting that wrong starves the guest
-         * rather than failing visibly, which is exactly what happened when it
-         * was. Nothing here configures one; a firmware that does should see
-         * this refusal in the log rather than a machine that stops answering.
-         */
-        qemu_log_mask(LOG_UNIMP,
-                      "esp32_gpio: pin %d wants a level interrupt, not modelled\n",
-                      n);
-        return;
+        fire = level;
+        break;
     default:
         return;
     }
@@ -156,6 +156,21 @@ static void esp32_gpio_latch_int(Esp32GpioState *s, int n, bool old_level,
         s->status1 |= 1u << (n - ESP32_GPIO_BANK1_FIRST);
     }
     esp32_gpio_update_irq(s);
+}
+
+/* Re-evaluate every pin's level interrupt against the level it is holding. A
+ * level source a handler cleared but that the peripheral has not released
+ * becomes pending again, which is what the hardware does and what a driver
+ * that waits on it needs. Passing old==new means edge-typed pins see no edge
+ * and stay quiet, so this is safe to run over the whole bank. */
+static void esp32_gpio_reassert_levels(Esp32GpioState *s)
+{
+    for (int n = 0; n < (int)s->pin_count; n++) {
+        bool level = n < ESP32_GPIO_BANK1_FIRST
+            ? !!(s->in & (1u << n))
+            : !!(s->in1 & (1u << (n - ESP32_GPIO_BANK1_FIRST)));
+        esp32_gpio_latch_int(s, n, level, level);
+    }
 }
 
 /* Push the pins whose level changed out to whatever is wired to them.
@@ -245,6 +260,7 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
     case A_GPIO_STATUS_W1TC:
         s->status &= ~(uint32_t)value;
         esp32_gpio_update_irq(s);
+        esp32_gpio_reassert_levels(s);
         break;
     case A_GPIO_STATUS_W1TS:
         s->status |= (uint32_t)value;
@@ -254,6 +270,7 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
     case A_GPIO_STATUS1_W1TC:
         s->status1 &= ~(uint32_t)value;
         esp32_gpio_update_irq(s);
+        esp32_gpio_reassert_levels(s);
         break;
     case A_GPIO_STATUS1_W1TS:
         s->status1 |= (uint32_t)value;
@@ -273,8 +290,11 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
                 ? !!(s->in & (1u << n))
                 : !!(s->in1 & (1u << (n - ESP32_GPIO_BANK1_FIRST)));
 
-            (void)level;
             s->pin[n] = (uint32_t)value;
+            /* old==new: no edge, so an edge pin stays quiet, but a level pin
+             * that is already at its trigger becomes pending the moment the
+             * driver arms it, rather than waiting for a change already past. */
+            esp32_gpio_latch_int(s, n, level, level);
         }
         return;
     }
