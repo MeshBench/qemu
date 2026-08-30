@@ -1,3 +1,33 @@
+==========================
+MeshBench fork of QEMU
+==========================
+
+A fork of `Espressif's QEMU <https://github.com/espressif/qemu>`_ (9.2.2),
+maintained for `MeshBench <https://github.com/MeshBench>`_, an RF-accurate
+MeshCore network simulator. Upstream plus a patch, not a rewrite.
+
+**What it adds.** An SX1262 on the SPI bus, with the front-end module's enable
+line brought in from the board and a socket to the radio model; the GPIO and
+interrupt behaviour MeshCore relies on; and enough of an ESP32-S3 for a
+published board image to boot and reach the air.
+
+**Why.** MeshBench runs the firmware image people actually flash, unmodified.
+That needs a radio the image can talk to, which upstream does not model.
+
+**Branches.** ``meshbench-main`` is the default, and the line releases are cut
+from. ``meshbench-sx1262`` is the earlier name for the same integration branch
+and is kept so existing references still resolve. Each change landed on its own
+``meshbench-*`` branch first, and those are kept as the record of what was added
+and as the basis for any upstream contribution. Upstream's branches are
+untouched.
+
+**Reporting.** Issues are tracked at
+`MeshBench/meshbench <https://github.com/MeshBench/meshbench/issues>`_, not here.
+
+QEMU's own README follows, with its licence and attribution intact.
+
+----
+
 ===========
 QEMU README
 ===========
