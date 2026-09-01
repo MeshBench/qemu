@@ -49,7 +49,9 @@ echo DBG
 # instantiation with "unknown type 'misc.esp32.rsa'" - a long way from the
 # cause. Checked here, where the answer is one grep, rather than on a user's
 # machine.
-grep -q '^#define CONFIG_GCRYPT 1' build/config-host.h || {
+# meson writes a bare "#define CONFIG_GCRYPT" for a boolean that is on, with
+# no value after it, so match the name and not a 1.
+grep -qE '^#define CONFIG_GCRYPT($|[[:space:]])' build/config-host.h || {
     echo "gcrypt is off in this build; the esp32 machine will not instantiate" >&2
     exit 1
 }

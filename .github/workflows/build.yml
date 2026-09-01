@@ -80,7 +80,13 @@ jobs:
           - x86_64-w64-mingw32
           # x86_64-apple-darwin is deliberately absent: the only Mac is an
           # arm64 one, and Rosetta cross-building x86_64 QEMU is not worth
-          # the runner's time until somebody on an Intel Mac asks.
+          # the runner's time until somebody on an Intel Mac asks. It had an
+          # include row below all the same, and an include whose platform is
+          # not in this list does not modify a combination - it adds one, with
+          # no target at all. That is where the qemu--<version>-x86_64-apple-darwin
+          # archive on the last release came from: a job nobody asked for,
+          # publishing a file nothing downloads. Adding a platform means adding
+          # it here, not only below.
           - aarch64-apple-darwin
         target: [xtensa-softmmu, riscv32-softmmu]
 
@@ -115,11 +121,6 @@ jobs:
             run_prerequisites: "./.github/workflows/scripts/prerequisites-cross-win64.sh"
             run_configure: "./.github/workflows/scripts/configure-cross-win64.sh"
 
-          # x86_64-apple-darwin has no row on purpose. An include whose
-          # platform is not in the list above does not modify a combination,
-          # it *adds* one - and this one added a job with no target at all,
-          # which published an archive called qemu--<version>-x86_64-apple-darwin
-          # that nothing downloads and nobody meant to build.
           - platform: aarch64-apple-darwin
             # The org's own M4: faster than hosted, no queue. Safe because
             # every event that reaches this workflow needs write access.
@@ -147,7 +148,6 @@ jobs:
       # MeshBench's fault. Source-level, so it holds on every platform in the
       # matrix including the ones whose binary this runner cannot execute.
       - name: This is MeshBench's fork, not upstream (${{ matrix.target }} @ ${{ matrix.platform }})
-        shell: bash -e {0}
         run: |
           # The radio. Upstream has no SX1262 at all.
           test -f hw/ssi/sx1262.c || {
