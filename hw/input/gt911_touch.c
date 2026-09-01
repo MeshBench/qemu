@@ -23,9 +23,12 @@
 #include "hw/i2c/i2c.h"
 #include "hw/qdev-properties.h"
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+/* qemu/osdep.h brings the socket headers on both platforms: sys/socket.h
+ * and sys/un.h on POSIX, winsock2 and afunix.h on Windows, where QEMU also
+ * wraps socket(), connect(), send(), recv() and close() so that errno says
+ * what a Winsock error meant. Including <sys/socket.h> here directly is what
+ * stopped this file cross-compiling for Windows at all. */
+#include "qemu/sockets.h"
 
 #define TYPE_GT911_TOUCH "gt911-touch"
 OBJECT_DECLARE_SIMPLE_TYPE(GT911State, GT911_TOUCH)
@@ -181,15 +184,18 @@ static void gt911_connect(GT911State *s)
         s->path = NULL;
         return;
     }
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    /* SOCK_NONBLOCK is a Linux extension. qemu_socket_set_nonblock() is the
+     * same thing said in a way the Windows build also understands. */
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         return;
     }
+    qemu_socket_set_nonblock(fd);
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     pstrcpy(addr.sun_path, sizeof(addr.sun_path), s->path);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 &&
-        errno != EINPROGRESS) {
+        errno != EINPROGRESS && errno != EWOULDBLOCK) {
         close(fd);
         return;
     }

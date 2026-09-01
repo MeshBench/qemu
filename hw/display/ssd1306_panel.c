@@ -26,9 +26,12 @@
 #include "qemu/cutils.h"
 #include "qemu/timer.h"
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+/* qemu/osdep.h brings the socket headers on both platforms: sys/socket.h
+ * and sys/un.h on POSIX, winsock2 and afunix.h on Windows, where QEMU also
+ * wraps socket(), connect(), send(), recv() and close() so that errno says
+ * what a Winsock error meant. Including <sys/socket.h> here directly is what
+ * stopped this file cross-compiling for Windows at all. */
+#include "qemu/sockets.h"
 
 #define TYPE_SSD1306_PANEL "ssd1306-panel"
 OBJECT_DECLARE_SIMPLE_TYPE(SSD1306PanelState, SSD1306_PANEL)
@@ -120,12 +123,14 @@ static void ssd1306_send_frame(SSD1306PanelState *s)
     }
     hdr[9] = s->on ? 1 : 0;
 
-    struct iovec iov[2] = {
-        {.iov_base = hdr, .iov_len = sizeof(hdr)},
-        {.iov_base = s->fb, .iov_len = sizeof(s->fb)},
-    };
-    struct msghdr msg = {.msg_iov = iov, .msg_iovlen = 2};
-    if (sendmsg(s->fd, &msg, MSG_NOSIGNAL) < 0) {
+    /* Two sends rather than one sendmsg: to a reader on a stream socket they
+     * are the same bytes in the same order, and sendmsg has no Windows
+     * spelling. qemu_send_full() also finishes a short write, which sendmsg
+     * did not. MSG_NOSIGNAL is not needed to go with it - QEMU ignores
+     * SIGPIPE process-wide, so a listener that has gone away arrives here as
+     * an error rather than as a dead emulator. */
+    if (qemu_send_full(s->fd, hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
+        qemu_send_full(s->fd, s->fb, sizeof(s->fb)) != (ssize_t)sizeof(s->fb)) {
         close(s->fd);
         s->fd = -1;
     }
