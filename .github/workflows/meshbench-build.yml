@@ -1,21 +1,35 @@
 name: meshbench build
 
-# QEMU with our SX1262, built here so that setting MeshBench up is a download
-# rather than an afternoon with a toolchain.
+# A six-minute check that this fork still builds and still carries its radio.
+# One target, one platform, and no release: build.yml is the only workflow
+# here that publishes, because it is the only one that produces the full
+# matrix under the names MeshBench's packaging matches on.
 #
-# Only the Xtensa target: this fork exists to run ESP32 firmware against a
+# The release step this workflow used to end with is gone, and that is the
+# whole point of the file's current shape. It wrote a tag carrying a single
+# qemu-meshbench-linux-x86_64.tar.gz; being the newest release that became
+# *latest*, and MeshBench fetches the Xtensa Linux, Windows and macOS archives
+# from latest by pattern. None of the three matched, every fetch is a warning
+# rather than a failure, and all three platforms' bundles shipped without an
+# emulator while every build stayed green. Publish by tagging a v* and letting
+# build.yml do it.
+#
+# Only the Xtensa target here: this fork exists to run ESP32 firmware against a
 # simulated radio, and building the other forty architectures would turn a six
 # minute job into an hour for nothing.
 
 on:
   push:
-    branches: [meshbench-sx1262]
+    # meshbench-sx1262 was the working branch and meshbench-main is the default
+    # branch it became; naming the old one meant this stopped running on pushes
+    # without anybody noticing it had.
+    branches: [meshbench-main]
   workflow_dispatch:
-    inputs:
-      release:
-        description: 'Publish a release from this build'
-        type: boolean
-        default: true
+
+# Read-only, deliberately. Every write this repository has any business making
+# from CI is a release, and releases come from build.yml on a v* tag.
+permissions:
+  contents: read
 
 jobs:
   linux:
@@ -70,45 +84,18 @@ jobs:
           tar czf dist/qemu-meshbench-linux-x86_64.tar.gz -C dist qemu-meshbench
           ls -la dist/*.tar.gz
 
+      # An artifact, never a release asset. It is here to be downloaded by
+      # somebody debugging this branch, and it is deliberately named nothing
+      # like the archives build.yml publishes: qemu-meshbench-linux-x86_64
+      # matches none of MeshBench's fetch patterns, and an asset by that name
+      # on a release is exactly how three platforms came to ship without an
+      # emulator.
       - uses: actions/upload-artifact@v4
         with:
           name: qemu-meshbench-linux
           path: dist/*.tar.gz
+          retention-days: 7
 
-      - name: Release
-        if: github.event_name == 'workflow_dispatch' && inputs.release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          TAG="meshbench-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
-          cat > /tmp/notes.md <<'NOTES'
-          QEMU with an SX1262 on the SPI bus, for running published ESP32
-          MeshCore firmware against a simulated radio.
-
-          Three things upstream does not have: the SX1262 device itself, a GPIO
-          implementation with a working write handler, and machine properties
-          for the radio wiring. RadioLib drives chip select as an ordinary GPIO
-          rather than through the SPI controller, so without the GPIO work the
-          chip sees an unframed byte stream and the driver reports no chip.
-
-          Built with --enable-gcrypt. Without it the esp32 machine will not
-          instantiate: it references an RSA device gated on gcrypt.
-          NOTES
-          gh release create "$TAG" dist/*.tar.gz \
-            --title "QEMU for MeshBench ($TAG)" \
-            --notes-file /tmp/notes.md
-
-  # No runner for these yet. Left visible rather than absent: an absent row is
-  # forgotten, a skipped one with a reason gets picked up.
-  macos:
-    if: false   # no runner yet: this fork has never been built on Darwin
-    runs-on: macos-14
-    steps:
-      - run: echo "needs an arm64 and an x86_64 build, and neither is tested"
-
-  windows:
-    if: false   # no runner yet: radioserver's QEMU path uses Unix sockets
-    runs-on: windows-latest
-    steps:
-      - run: echo "needs the TCP path radioserver already has for Renode"
+  # macOS and Windows are not skipped rows here any more: build.yml builds
+  # both, Windows cross-compiled on a Linux runner, and this file is the quick
+  # single-platform check rather than a matrix with two thirds of it disabled.
