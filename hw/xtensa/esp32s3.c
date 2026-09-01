@@ -1202,11 +1202,13 @@ static void esp32s3_machine_init(MachineState *machine)
              * reports no chip fitted. Which is what happened, on a build that
              * never touches the card at all. */
             qemu_set_irq(cs, 1);
-            DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
-            if (dinfo) {
+            /* card_dinfo, not dinfo: the function already has one, for the
+             * flash, and -Wshadow=local is an error in the release build. */
+            DriveInfo *card_dinfo = drive_get(IF_SD, 0, 0);
+            if (card_dinfo) {
                 DeviceState *card = qdev_new(TYPE_SD_CARD_SPI);
                 qdev_prop_set_drive_err(card, "drive",
-                                        blk_by_legacy_dinfo(dinfo), &error_fatal);
+                                        blk_by_legacy_dinfo(card_dinfo), &error_fatal);
                 qdev_realize_and_unref(card,
                     qdev_get_child_bus(slot, "sd-bus"), &error_fatal);
             }
