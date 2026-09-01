@@ -2,6 +2,27 @@
 
 set -euo pipefail
 
+# A self-hosted runner's service environment is not the shell a person gets,
+# and Homebrew is routinely absent from its PATH. Look where it installs before
+# concluding it is not there: /opt/homebrew on Apple Silicon, /usr/local on
+# Intel. GITHUB_PATH rather than PATH alone, because the Configure step that
+# needs ninja and pkg-config runs in a different shell from this one.
+if ! command -v brew >/dev/null; then
+  for p in /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$p/brew" ]; then
+      export PATH="$p:$PATH"
+      [ -n "${GITHUB_PATH:-}" ] && echo "$p" >> "$GITHUB_PATH"
+      break
+    fi
+  done
+fi
+if ! command -v brew >/dev/null; then
+  echo "::error::brew is not on this runner and is not in either of the two"\
+       "places it installs. Nothing below is installed, and the failure"\
+       "surfaces three steps later as configure saying 'Cannot find Ninja'." >&2
+  exit 1
+fi
+
 brew install \
   glib \
   libgcrypt \
@@ -11,6 +32,18 @@ brew install \
   pkg-config \
   sdl2 \
 && :
+
+# brew install is allowed to come back non-zero for reasons that do not matter
+# - a formula already installed, a warning about a link - so what is checked is
+# the outcome rather than the exit code. Both of these are what configure looks
+# for first, and their absence used to be reported by configure as its own
+# failure several steps later.
+missing=""
+for t in ninja pkg-config; do command -v "$t" >/dev/null || missing="$missing $t"; done
+if [ -n "$missing" ]; then
+  echo "::error::brew ran and left these missing:$missing" >&2
+  exit 1
+fi
 
 # workaround if deprecated module 'distutils.version' is missing
 # https://peps.python.org/pep-0632/#migration-advice

@@ -1,5 +1,21 @@
 name: 'build'
 
+# The only workflow in this repository that may publish a release, and the
+# reason is the asset names. MeshBench's packaging fetches from this fork's
+# *latest* release by pattern:
+#
+#   Linux    xtensa.*x86_64-linux-gnu\.tar\.xz$
+#   Windows  xtensa.*x86_64-w64-mingw32\.tar\.xz$
+#   macOS    *xtensa*aarch64-apple-darwin.tar.xz
+#
+# and treats a miss as a warning, not a failure. So a release from anywhere
+# else becomes latest, matches none of those, and every platform's bundle
+# ships without an emulator while every build stays green. That happened:
+# meshbench-20260901-6b3a41a carried one qemu-meshbench-linux-x86_64.tar.gz
+# and shadowed a full matrix. The Package step below owns those names -
+# ${PROJECT_NAME}-${TARGET}-${VERSION}-${PLATFORM}.tar.xz - and they are a
+# contract with that consumer, not a convention.
+#
 # push and workflow_dispatch only - pull_request is deliberately gone. The
 # macOS legs run on the org's own Mac now, and a fork pull request runs the
 # PR's version of this file, which could point any job at that machine. Push
@@ -51,12 +67,9 @@ jobs:
 
   Build:
     needs: [ Vars ]
-    env:
-      # A simple way to spread several environments for Windows. But to be more precise, we need to somehow add different envs to matrix.include
-
-      MSYSTEM: MINGW64  # Ref: https://www.msys2.org/docs/environments/
-      CHERE_INVOKING: 'yes'
-      MSYS: 'winsymlinks:native'
+    # No msys2 environment any more: every Linux and Windows archive here is
+    # built on a Linux runner, so there is nothing left to tell msys2 which
+    # environment it is in.
     strategy:
       fail-fast: false
       matrix:
@@ -67,7 +80,13 @@ jobs:
           - x86_64-w64-mingw32
           # x86_64-apple-darwin is deliberately absent: the only Mac is an
           # arm64 one, and Rosetta cross-building x86_64 QEMU is not worth
-          # the runner's time until somebody on an Intel Mac asks.
+          # the runner's time until somebody on an Intel Mac asks. It had an
+          # include row below all the same, and an include whose platform is
+          # not in this list does not modify a combination - it adds one, with
+          # no target at all. That is where the qemu--<version>-x86_64-apple-darwin
+          # archive on the last release came from: a job nobody asked for,
+          # publishing a file nothing downloads. Adding a platform means adding
+          # it here, not only below.
           - aarch64-apple-darwin
         target: [xtensa-softmmu, riscv32-softmmu]
 
@@ -88,16 +107,19 @@ jobs:
             run_prerequisites: "./.github/workflows/scripts/prerequisites-cross-linux-arm64.sh"
             run_configure: "./.github/workflows/scripts/configure-cross-linux-arm64.sh"
 
+          # Cross-compiled on a Linux runner, not built on a Windows one. The
+          # binary is the same x86_64-w64-mingw32 triplet either way and the
+          # archive keeps its name, so nothing downstream can tell - what
+          # changes is that a Windows release no longer waits on a Windows
+          # runner. Fedora because it is the only distribution that packages
+          # MinGW builds of glib2, pixman and libgcrypt; QEMU's own CI
+          # cross-builds Windows from the same base.
           - platform: x86_64-w64-mingw32
-            runs_on: windows-2022
-            shell: msys2 {0}
-            run_configure: "./.github/workflows/scripts/configure-win.sh"
-
-          - platform: x86_64-apple-darwin
-            runs_on: macos-14
+            runs_on: ubuntu-22.04
+            container: fedora:latest
             shell: bash -e {0}
-            run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
-            run_configure: "./.github/workflows/scripts/configure-macos.sh"
+            run_prerequisites: "./.github/workflows/scripts/prerequisites-cross-win64.sh"
+            run_configure: "./.github/workflows/scripts/configure-cross-win64.sh"
 
           - platform: aarch64-apple-darwin
             # The org's own M4: faster than hosted, no queue. Safe because
@@ -118,29 +140,28 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install prerequisites (${{ matrix.target }} @ ${{ matrix.platform }})
-        if : ${{ matrix.platform != 'x86_64-w64-mingw32' }}
         run: |
           ${{ matrix.run_prerequisites }}
 
-      - name: Install MSYS2 prerequisites (${{ matrix.target }} @ ${{ matrix.platform }})
-        if : ${{ matrix.platform == 'x86_64-w64-mingw32' }}
-        uses: msys2/setup-msys2@v2
-        with:
-          cache: true
-          msystem: MINGW64
-          install: >-
-            diffutils
-            git
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-glib2
-            mingw-w64-x86_64-libgcrypt
-            mingw-w64-x86_64-libiconv
-            mingw-w64-x86_64-libslirp
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pixman
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-SDL2
+      # Before anything is built, because the answer is one grep and the
+      # alternative is a QEMU that runs, reports no chip present, and reads as
+      # MeshBench's fault. Source-level, so it holds on every platform in the
+      # matrix including the ones whose binary this runner cannot execute.
+      - name: This is MeshBench's fork, not upstream (${{ matrix.target }} @ ${{ matrix.platform }})
+        run: |
+          # The radio. Upstream has no SX1262 at all.
+          test -f hw/ssi/sx1262.c || {
+            echo "::error::hw/ssi/sx1262.c is missing - this checkout resolved to upstream QEMU"; exit 1; }
+          # DIO1, and the pin interrupt behind it. MeshCore's recvRaw() is
+          # gated solely on the DIO1 ISR, so a QEMU whose SX1262 has no DIO1
+          # output, or whose GPIO controller latches no interrupt, decodes
+          # every packet perfectly and relays none of them - which read as a
+          # MeshCore routing bug for months.
+          grep -q 'dio1' hw/ssi/sx1262.c || {
+            echo "::error::the SX1262 has no DIO1 line; emulated boards will decode and never relay"; exit 1; }
+          grep -qi 'irq' hw/gpio/esp32_gpio.c || {
+            echo "::error::esp32_gpio.c raises no interrupt; DIO1 would never reach the firmware"; exit 1; }
+          echo "sx1262 present, DIO1 wired, GPIO raises interrupts"
 
       - name: Configure (${{ matrix.target }} @ ${{ matrix.platform }})
         env:
@@ -156,7 +177,21 @@ jobs:
       - name: Bundle Windows DLLs (${{ matrix.target }} @ ${{ matrix.platform }})
         if : ${{ matrix.platform == 'x86_64-w64-mingw32' }}
         run: |
-          ./.github/workflows/scripts/bundle-win-dlls.sh install/qemu/bin
+          ./.github/workflows/scripts/bundle-cross-win-dlls.sh install/qemu/bin
+
+      # Only where the runner can run what it just built. The other four
+      # platforms get the source-level check above and nothing more, which is
+      # the honest limit of a cross-compile.
+      - name: The machine MeshBench asks for exists (${{ matrix.target }} @ ${{ matrix.platform }})
+        if : ${{ matrix.platform == 'x86_64-linux-gnu' && matrix.target == 'xtensa-softmmu' }}
+        run: |
+          install/qemu/bin/qemu-system-xtensa -machine help | grep -qi esp32
+          install/qemu/bin/qemu-system-xtensa --version | head -1
+          # Informational: the SX1262 carries no device category, so whether
+          # it shows in this listing is a QEMU presentation detail rather than
+          # a statement about the build. The source check above is the gate.
+          install/qemu/bin/qemu-system-xtensa -device help 2>&1 | grep -i sx1262 \
+            || echo "sx1262 is compiled in but not listed by -device help"
 
       - name: Package (${{ matrix.target }} @ ${{ matrix.platform }})
         env:
@@ -259,10 +294,11 @@ jobs:
             dist/
 
   Upload:
-    # always(), because the matrix builds five platforms and a tag should
-    # still publish the ones that worked. Windows (mingw) and macOS arm64 do
-    # not build in this fork yet; waiting for them would mean never releasing
-    # the Linux and macOS x86_64 emulators that do.
+    # always(), because the matrix builds four platforms and a tag should
+    # still publish the ones that worked - a Mac that is asleep should not
+    # withhold the Linux and Windows emulators. What "the ones that worked"
+    # may not include is checked below: a release missing an archive somebody
+    # downloads by pattern is worse than no release at all.
     if: always() && startsWith(github.ref, 'refs/tags/')
     needs: [ Vars, Build ]
     runs-on: ubuntu-latest
@@ -332,20 +368,32 @@ jobs:
       # containing only a source archive, and that release then shadows the
       # last good one for anybody downloading by pattern. Ask for at least
       # one platform archive before releasing anything.
-      - name: Refuse to release without the platform MeshBench needs
+      - name: Refuse to release without the platforms MeshBench fetches
         run: |
           set -e
           find upload -name '*.tar.xz' -printf '  %f\n' | sort
-          # "At least one archive" is not enough. A release with only the
-          # macOS builds still becomes *latest*, and MeshBench downloads the
-          # Xtensa Linux archive by pattern from whatever latest is - so a
-          # partial release silently replaces a working one with a set that
-          # does not contain the file anybody fetches. This is the file that
-          # makes a release worth publishing.
-          if ! find upload -name '*xtensa*x86_64-linux-gnu.tar.xz' | grep -q .; then
-            echo "::error::no Xtensa x86_64 Linux archive; not publishing a release that would shadow the last good one"
+          # "At least one archive" is not enough. Any release becomes *latest*,
+          # and MeshBench's packaging downloads by pattern from whatever latest
+          # is - so a partial release silently replaces a working one with a
+          # set that does not contain the file somebody fetches. Worse, it does
+          # it quietly: the consumer treats a missing asset as a warning and
+          # ships a bundle with no emulator in it, and no build fails.
+          #
+          # These two are the ones built here on Linux runners, so if either is
+          # missing something is wrong with this workflow rather than with a
+          # machine somewhere. macOS is fetched by pattern too, but it is built
+          # on the org's own Mac and that machine being offline should not stop
+          # a Linux and Windows release - it warns instead.
+          missing=""
+          for want in '*xtensa*x86_64-linux-gnu.tar.xz' '*xtensa*x86_64-w64-mingw32.tar.xz'; do
+            find upload -name "$want" | grep -q . || missing="$missing $want"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing - not publishing a release that would shadow the last good one"
             exit 1
           fi
+          find upload -name '*xtensa*aarch64-apple-darwin.tar.xz' | grep -q . || \
+            echo "::warning::no Xtensa macOS archive; the macOS bundle will ship without QEMU"
 
       - name: Release
         uses: softprops/action-gh-release@v2

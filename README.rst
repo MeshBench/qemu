@@ -21,6 +21,16 @@ and is kept so existing references still resolve. Each change landed on its own
 and as the basis for any upstream contribution. Upstream's branches are
 untouched.
 
+**Releases.** Push a ``v*`` tag on ``meshbench-main``; ``build.yml`` builds the
+matrix and publishes it. That workflow is the only one here that may publish,
+because MeshBench's packaging downloads from this fork's *latest* release by
+pattern - ``xtensa.*x86_64-linux-gnu``, ``x86_64-w64-mingw32`` and
+``aarch64-apple-darwin`` - and a missing asset there is a warning rather than a
+failure. So a release carrying anything less than the matrix becomes latest,
+matches nothing, and every MeshBench bundle ships without an emulator while
+every build stays green. That has happened once. The archive names are a
+contract with that consumer, not a convention.
+
 **Reporting.** Issues are tracked at
 `MeshBench/meshbench <https://github.com/MeshBench/meshbench/issues>`_, not here.
 

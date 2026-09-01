@@ -29,9 +29,12 @@
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+/* qemu/osdep.h brings the socket headers on both platforms: sys/socket.h
+ * and sys/un.h on POSIX, winsock2 and afunix.h on Windows, where QEMU also
+ * wraps socket(), connect(), send(), recv() and close() so that errno says
+ * what a Winsock error meant. Including <sys/socket.h> here directly is what
+ * stopped this file cross-compiling for Windows at all. */
+#include "qemu/sockets.h"
 
 #define TYPE_ST7789_PANEL "st7789-panel"
 OBJECT_DECLARE_SIMPLE_TYPE(ST7789PanelState, ST7789_PANEL)
@@ -126,12 +129,16 @@ static void st7789_send_frame(ST7789PanelState *s)
     }
     hdr[9] = s->on ? 1 : 0;
 
-    struct iovec iov[2] = {
-        {.iov_base = hdr, .iov_len = sizeof(hdr)},
-        {.iov_base = s->fb, .iov_len = (size_t)s->width * s->height * 2},
-    };
-    struct msghdr msg = {.msg_iov = iov, .msg_iovlen = 2};
-    if (sendmsg(s->fd, &msg, MSG_NOSIGNAL) < 0) {
+    /* Two sends rather than one sendmsg: to a reader on a stream socket they
+     * are the same bytes in the same order, and sendmsg has no Windows
+     * spelling. qemu_send_full() also finishes a short write, which sendmsg
+     * did not - and a frame this size, 150 KB on a T-Deck, is exactly where a
+     * short write happens. MSG_NOSIGNAL is not needed to go with it: QEMU
+     * ignores SIGPIPE process-wide, so a listener that has gone away arrives
+     * here as an error rather than as a dead emulator. */
+    size_t pixels = (size_t)s->width * s->height * 2;
+    if (qemu_send_full(s->fd, hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
+        qemu_send_full(s->fd, s->fb, pixels) != (ssize_t)pixels) {
         close(s->fd);
         s->fd = -1;
     }

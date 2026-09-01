@@ -1221,15 +1221,25 @@ if not get_option('slirp').auto() or have_system
                      method: 'pkg-config',
                      static: true)
 
-  # https://gitlab.freedesktop.org/slirp/libslirp/-/merge_requests/134
-  slirp_cflags = []
-  if host_os == 'windows' and get_option('prefer_static')
-    slirp_cflags += ['-DLIBSLIRP_STATIC'] 
-  endif
+  # Only wrap a dependency that was actually found. declare_dependency() always
+  # reports found(), so wrapping a missing or disabled libslirp unconditionally
+  # made CONFIG_SLIRP true with no libslirp behind it: net/slirp.c then
+  # compiled and stopped at "libslirp.h: No such file or directory", with the
+  # configure summary saying "slirp support: YES" and "slirp: disabled" two
+  # lines apart. --disable-slirp now means what it says, which is what the
+  # Windows cross-build needs - Fedora packages no mingw libslirp, and nothing
+  # in MeshBench asks for user networking.
+  if slirp_dep.found()
+    # https://gitlab.freedesktop.org/slirp/libslirp/-/merge_requests/134
+    slirp_cflags = []
+    if host_os == 'windows' and get_option('prefer_static')
+      slirp_cflags += ['-DLIBSLIRP_STATIC']
+    endif
 
-  slirp = declare_dependency(dependencies: [slirp_dep],
-                          compile_args: slirp_cflags,
-                          version: slirp_dep.version())
+    slirp = declare_dependency(dependencies: [slirp_dep],
+                            compile_args: slirp_cflags,
+                            version: slirp_dep.version())
+  endif
 
   # slirp < 4.7 is incompatible with CFI support in QEMU.  This is because
   # it passes function pointers within libslirp as callbacks for timers.
