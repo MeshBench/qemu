@@ -294,11 +294,10 @@ jobs:
             dist/
 
   Upload:
-    # always(), because the matrix builds four platforms and a tag should
-    # still publish the ones that worked - a Mac that is asleep should not
-    # withhold the Linux and Windows emulators. What "the ones that worked"
-    # may not include is checked below: a release missing an archive somebody
-    # downloads by pattern is worse than no release at all.
+    # always() so a tag whose matrix lost a leg still reaches the check below
+    # and names what is missing, rather than being skipped in silence. It does
+    # not mean a partial release gets published: every Xtensa archive a
+    # consumer fetches by pattern has to be present, or nothing is cut.
     if: always() && startsWith(github.ref, 'refs/tags/')
     needs: [ Vars, Build ]
     runs-on: ubuntu-latest
@@ -379,21 +378,24 @@ jobs:
           # it quietly: the consumer treats a missing asset as a warning and
           # ships a bundle with no emulator in it, and no build fails.
           #
-          # These two are the ones built here on Linux runners, so if either is
-          # missing something is wrong with this workflow rather than with a
-          # machine somewhere. macOS is fetched by pattern too, but it is built
-          # on the org's own Mac and that machine being offline should not stop
-          # a Linux and Windows release - it warns instead.
+          # All three, including macOS. It used to warn on macOS alone, on the
+          # grounds that the org's own Mac being asleep should not withhold the
+          # Linux and Windows emulators. That trade is the wrong way round: the
+          # new release becomes the one consumers resolve by pattern, so a set
+          # missing macOS silently replaces a complete one, and the Mac bundle
+          # then ships with no emulator while every build stays green. A
+          # sleeping Mac is a reason to wake it, not to publish two thirds of a
+          # release over a whole one.
           missing=""
-          for want in '*xtensa*x86_64-linux-gnu.tar.xz' '*xtensa*x86_64-w64-mingw32.tar.xz'; do
+          for want in '*xtensa*x86_64-linux-gnu.tar.xz' \
+                      '*xtensa*x86_64-w64-mingw32.tar.xz' \
+                      '*xtensa*aarch64-apple-darwin.tar.xz'; do
             find upload -name "$want" | grep -q . || missing="$missing $want"
           done
           if [ -n "$missing" ]; then
             echo "::error::missing:$missing - not publishing a release that would shadow the last good one"
             exit 1
           fi
-          find upload -name '*xtensa*aarch64-apple-darwin.tar.xz' | grep -q . || \
-            echo "::warning::no Xtensa macOS archive; the macOS bundle will ship without QEMU"
 
       - name: Release
         uses: softprops/action-gh-release@v2
