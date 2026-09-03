@@ -998,11 +998,15 @@ glib_cflags = []
 if enable_modules
   gmodule = dependency('gmodule-export-2.0', version: glib_req_ver, required: true,
                        method: 'pkg-config')
-elif get_option('plugins')
+else
+  # Required unconditionally in this fork, where upstream leaves it not_found
+  # when neither modules nor plugins are enabled. The sx1262 device loads
+  # MeshBench's chip model at runtime through GModule, so a build without it
+  # links every other target and then fails on qemu-system-xtensa alone, which
+  # is how the first release carrying that device died on macOS while Linux -
+  # configured with plugins, and so with gmodule - built fine.
   gmodule = dependency('gmodule-no-export-2.0', version: glib_req_ver, required: true,
                        method: 'pkg-config')
-else
-  gmodule = not_found
 endif
 
 # This workaround is required due to a bug in pkg-config file for glib as it
