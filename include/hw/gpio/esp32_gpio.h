@@ -110,4 +110,19 @@ typedef struct Esp32GpioClass {
 
     /* How many GPIOs this part actually has. */
     uint32_t pin_count;
+
+    /* Byte offset of GPIO_PIN0_REG, the first per-pin config register. The
+     * ESP32-S3 has extra per-core interrupt registers ahead of it, so its
+     * block starts at 0x74 where the ESP32's starts at 0x88. The per-pin
+     * interrupt config (and so every pin interrupt, the SX1262's DIO1 among
+     * them) lands on the wrong pin if this is read from the wrong base. */
+    uint32_t pin0_offset;
+
+    /* Byte offset of the bank-1 per-CPU interrupt status register
+     * (GPIO_PCPU_INT1 / GPIO_STATUS_NEXT1), which a level-1 interrupt handler
+     * reads to find which pin above 32 fired. The ESP32 has it at 0x7C, the
+     * ESP32-S3 at 0x68. Reading it from the wrong offset returns zero, so the
+     * handler never finds the SX1262's DIO1 on pin 33 and the board never
+     * relays. Mirrors GPIO_STATUS1. */
+    uint32_t pcpu_int1_offset;
 } Esp32GpioClass;
