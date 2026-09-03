@@ -1031,6 +1031,14 @@ static void esp32s3_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ss->gpio), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpio), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
+        /* Route the GPIO interrupt to the matrix, exactly as esp32.c does. It
+         * was realized and mapped but never wired, so a GPIO configured for an
+         * edge interrupt raised its line into nothing: on ESP32-S3 the SX1262's
+         * DIO1 (packet received) never reached the firmware's ISR, so the radio
+         * received every frame yet MeshCore, which reads a packet only from that
+         * ISR, never collected one and never relayed. */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpio), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_GPIO_INTR_SOURCE));
     }
 
     {

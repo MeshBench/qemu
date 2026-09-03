@@ -30,9 +30,19 @@ static void esp32s3_gpio_init(Object *obj)
  * in this class_init function */
 static void esp32s3_gpio_class_init(ObjectClass *klass, void *data)
 {
-    /* 49 GPIOs, against the ESP32's 40. Everything else - the register layout,
-     * the two banks, the propagation to wired peripherals - is the parent's. */
+    /* 49 GPIOs, against the ESP32's 40. The two banks and the propagation to
+     * wired peripherals are the parent's, but the per-pin config block is not:
+     * the S3 has extra per-core interrupt registers before it, so GPIO_PIN0_REG
+     * sits at 0x74 rather than the ESP32's 0x88. Without this the firmware's
+     * per-pin interrupt config lands on the wrong pin - the SX1262's DIO1 (pin
+     * 33) config was arriving on pin 28, so the packet-received interrupt never
+     * fired and no ESP32-S3 board ever relayed. */
     ESP32_GPIO_CLASS(klass)->pin_count = ESP32S3_GPIO_PIN_COUNT;
+    ESP32_GPIO_CLASS(klass)->pin0_offset = 0x0074;
+    /* GPIO_PCPU_INT1_REG - the bank-1 per-CPU interrupt status the ISR reads to
+     * find a pin above 32. On the S3 it is at 0x68 (0x7C on the ESP32). Without
+     * this the SX1262's DIO1 on pin 33 is never found and no board relays. */
+    ESP32_GPIO_CLASS(klass)->pcpu_int1_offset = 0x0068;
 }
 
 static const TypeInfo esp32s3_gpio_info = {
