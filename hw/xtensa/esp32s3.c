@@ -402,7 +402,7 @@ struct Esp32s3MachineState {
     bool psram_octal;
     /* Whether the coprocessors come up enabled. Off, as the part is. */
     bool cp_at_reset;
-    char *radio_path;
+    char *radio_bridge;
     uint32_t radio_spi;
     /* The board's display, where it has one: which controller, on which I2C
      * controller at which address, and the socket its picture leaves by.
@@ -460,7 +460,7 @@ struct Esp32s3MachineState {
  * Default index 2 is GPSPI2 - FSPI on this part, and what Arduino's SPI object
  * drives. Boards that route the radio elsewhere override it.
  */
-static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
+static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *bridge,
                                        unsigned spi_index, unsigned cs,
                                        unsigned nss_pin, unsigned busy_pin,
                                        unsigned dio1_pin, unsigned fem_pin)
@@ -476,7 +476,7 @@ static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *path,
     BusState *spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *radio = qdev_new("sx1262");
 
-    qdev_prop_set_string(radio, "path", path);
+    qdev_prop_set_string(radio, "bridge", bridge);
     qdev_prop_set_uint8(radio, "cs", cs);
     qdev_realize_and_unref(radio, spi_bus, &error_fatal);
 
@@ -1178,8 +1178,8 @@ static void esp32s3_machine_init(MachineState *machine)
         } else {
             esp32s3_gpspi_share_bus(&ss->gpspi3, &ss->gpspi2);
         }
-        if (mach->radio_path) {
-            esp32s3_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
+        if (mach->radio_bridge) {
+            esp32s3_machine_init_radio(ss, mach->radio_bridge, mach->radio_spi,
                                        mach->radio_cs, mach->radio_nss,
                                        mach->radio_busy, mach->radio_dio1,
                                        mach->radio_fem);
@@ -1480,16 +1480,16 @@ static void esp32s3_set_psram_octal(Object *obj, bool value, Error **errp)
     ESP32S3_MACHINE(obj)->psram_octal = value;
 }
 
-static char *esp32s3_get_radio_path(Object *obj, Error **errp)
+static char *esp32s3_get_radio_bridge(Object *obj, Error **errp)
 {
-    return g_strdup(ESP32S3_MACHINE(obj)->radio_path);
+    return g_strdup(ESP32S3_MACHINE(obj)->radio_bridge);
 }
 
-static void esp32s3_set_radio_path(Object *obj, const char *value, Error **errp)
+static void esp32s3_set_radio_bridge(Object *obj, const char *value, Error **errp)
 {
     Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
-    g_free(ms->radio_path);
-    ms->radio_path = g_strdup(value);
+    g_free(ms->radio_bridge);
+    ms->radio_bridge = g_strdup(value);
 }
 
 static char *esp32s3_get_input_path(Object *obj, Error **errp)
@@ -1564,10 +1564,10 @@ static void esp32s3_machine_instance_init(Object *obj)
                              esp32s3_get_psram_octal, esp32s3_set_psram_octal);
     object_property_set_description(obj, "psram-octal",
         "the external RAM is an octal (OPI) part rather than a quad one");
-    object_property_add_str(obj, "radio-path",
-                            esp32s3_get_radio_path, esp32s3_set_radio_path);
-    object_property_set_description(obj, "radio-path",
-        "unix socket of the SX1262 model to attach to the SPI bus");
+    object_property_add_str(obj, "radio-bridge",
+                            esp32s3_get_radio_bridge, esp32s3_set_radio_bridge);
+    object_property_set_description(obj, "radio-bridge",
+        "host:port of the RF engine this node's radio joins");
     object_property_add_uint32_ptr(obj, "radio-spi", &ms->radio_spi,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-spi",

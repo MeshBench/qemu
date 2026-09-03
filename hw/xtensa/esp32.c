@@ -743,7 +743,7 @@ struct Esp32MachineState {
 
     /* The LoRa radio, when one was asked for: the socket of the model that
      * answers its SPI, and where on the bus it sits. */
-    char *radio_path;
+    char *radio_bridge;
     uint32_t radio_spi;
     uint32_t radio_cs;
     uint32_t radio_nss;
@@ -775,7 +775,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
  * boards and would silently wire the module to whatever drives it. */
 #define ESP32_RADIO_PIN_NONE UINT32_MAX
 
-static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
+static void esp32_machine_init_radio(Esp32SocState *ss, const char *bridge,
                                      unsigned spi_index, unsigned cs,
                                      unsigned nss_pin, unsigned busy_pin,
                                      unsigned dio1_pin, unsigned fem_pin)
@@ -790,7 +790,7 @@ static void esp32_machine_init_radio(Esp32SocState *ss, const char *path,
     BusState *spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *radio = qdev_new("sx1262");
 
-    qdev_prop_set_string(radio, "path", path);
+    qdev_prop_set_string(radio, "bridge", bridge);
     qdev_prop_set_uint8(radio, "cs", cs);
     qdev_realize_and_unref(radio, spi_bus, &error_fatal);
 
@@ -952,8 +952,8 @@ static void esp32_machine_init(MachineState *machine)
 
     {
         Esp32MachineState *mach = ESP32_MACHINE(OBJECT(machine));
-        if (mach->radio_path) {
-            esp32_machine_init_radio(ss, mach->radio_path, mach->radio_spi,
+        if (mach->radio_bridge) {
+            esp32_machine_init_radio(ss, mach->radio_bridge, mach->radio_spi,
                                      mach->radio_cs, mach->radio_nss,
                                      mach->radio_busy, mach->radio_dio1,
                                      mach->radio_fem);
@@ -1071,16 +1071,16 @@ static void esp32_machine_class_init(ObjectClass *oc, void *data)
     mc->fixup_ram_size = esp32_fixup_ram_size;
 }
 
-static char *esp32_get_radio_path(Object *obj, Error **errp)
+static char *esp32_get_radio_bridge(Object *obj, Error **errp)
 {
-    return g_strdup(ESP32_MACHINE(obj)->radio_path);
+    return g_strdup(ESP32_MACHINE(obj)->radio_bridge);
 }
 
-static void esp32_set_radio_path(Object *obj, const char *value, Error **errp)
+static void esp32_set_radio_bridge(Object *obj, const char *value, Error **errp)
 {
     Esp32MachineState *ms = ESP32_MACHINE(obj);
-    g_free(ms->radio_path);
-    ms->radio_path = g_strdup(value);
+    g_free(ms->radio_bridge);
+    ms->radio_bridge = g_strdup(value);
 }
 
 static void esp32_machine_instance_init(Object *obj)
@@ -1096,10 +1096,10 @@ static void esp32_machine_instance_init(Object *obj)
      * something else. */
     ms->radio_dio1 = ESP32_RADIO_PIN_NONE;
     ms->radio_fem = ESP32_RADIO_PIN_NONE;  /* most boards have no module */
-    object_property_add_str(obj, "radio-path",
-                            esp32_get_radio_path, esp32_set_radio_path);
-    object_property_set_description(obj, "radio-path",
-        "unix socket of the SX1262 model to attach to the SPI bus");
+    object_property_add_str(obj, "radio-bridge",
+                            esp32_get_radio_bridge, esp32_set_radio_bridge);
+    object_property_set_description(obj, "radio-bridge",
+        "host:port of the RF engine this node's radio joins");
     object_property_add_uint32_ptr(obj, "radio-spi", &ms->radio_spi,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "radio-spi",
