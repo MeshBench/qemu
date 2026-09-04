@@ -321,7 +321,22 @@ static void esp32_gpio_set_input(void *opaque, int n, int level)
 {
     Esp32GpioState *s = ESP32_GPIO(opaque);
 
-    if (n < 0 || n >= ESP32_GPIO_PIN_COUNT) {
+    /* s->pin_count, not ESP32_GPIO_PIN_COUNT. The constant is the ESP32's 40
+     * and is right only as this class's default; the S3 subclass raises the
+     * instance's count to 49, which is why every other loop in this file reads
+     * it from the instance.
+     *
+     * Bounding a peripheral's input by the constant silently dropped every
+     * level on pins 40 to 48 - it returns, so nothing is logged and no guest
+     * register moves. The LilyGo T-Deck wires the SX1262's DIO1 to GPIO 45,
+     * and MeshCore collects a packet only from the ISR that line fires: the
+     * chip raised RxDone, routed it to DIO1 as it should, the firmware read
+     * the status and cleared it, and the packet was never collected. That
+     * board heard every advert and forwarded none, while boards on pins 14,
+     * 33 and 39 forwarded normally - the whole difference being which side of
+     * 40 the pin sits on.
+     */
+    if (n < 0 || n >= (int)s->pin_count) {
         return;
     }
     bool old_level;
