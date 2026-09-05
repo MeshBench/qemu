@@ -478,6 +478,13 @@ static void esp32s3_machine_init_radio(Esp32s3SocState *ss, const char *bridge,
 
     qdev_prop_set_string(radio, "bridge", bridge);
     qdev_prop_set_uint8(radio, "cs", cs);
+    /* UART0, so the engine can be told what rate the console has been set to.
+     * Always this one: which of UART0 and the USB peripheral a board's Serial
+     * is on is the firmware's choice and not the machine's, so the machine
+     * reports the UART and whoever knows the board decides whether that is the
+     * console at all. */
+    object_property_set_link(OBJECT(radio), "console-uart",
+                             OBJECT(&ss->uart[0]), &error_abort);
     qdev_realize_and_unref(radio, spi_bus, &error_fatal);
 
     /* NSS and BUSY are ordinary GPIOs on these boards, not the controller's own

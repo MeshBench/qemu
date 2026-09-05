@@ -43,6 +43,7 @@
 #include "qemu/sockets.h"
 
 #include <gmodule.h>
+#include "hw/char/esp32_uart.h"
 
 #define TYPE_SX1262 "sx1262"
 OBJECT_DECLARE_SIMPLE_TYPE(SX1262State, SX1262)
@@ -149,7 +150,7 @@ enum {
 };
 
 /* The stats record, whose layout the engine reads on length. */
-#define ENGINE_STATS_LEN 39
+#define ENGINE_STATS_LEN 43
 
 struct SX1262State {
     SSIPeripheral parent_obj;
@@ -164,6 +165,16 @@ struct SX1262State {
 
     bool cs_active;
     bool fem_level;
+
+    /* The UART this board's console is on, where it is on one at all.
+     *
+     * Not a property of the radio, and reported by it for the same reason the
+     * front-end module's line is: this device owns the link to the engine, and
+     * the engine has no other way to be told what the node has been asked for.
+     * A board whose console is the USB peripheral leaves this unset, and the
+     * rate reported is then zero - which is the truth, because USB CDC has no
+     * line rate to run at. */
+    ESP32UARTState *console_uart;
 
     /* NSS in, BUSY and DIO1 out. All ordinary GPIOs on these boards rather
      * than the SPI controller's own lines, so the board wires them pin to
@@ -329,6 +340,12 @@ static void sx1262_send_stats(SX1262State *s)
      * still high when RxDone arrived, and a driver that attaches on the rising
      * edge never learned the packet existed. */
     sx1262_put16(&sb[37], st.s.dio1_mask);
+    /* What the firmware set the console's UART to, which it does by writing a
+     * divider this machine turns back into a rate. Zero where the console is
+     * not on a UART: on a board whose Serial is the USB peripheral there is no
+     * line and no rate, and reporting the idle UART0 beside it would be a
+     * number that means nothing. */
+    sx1262_put32(&sb[39], s->console_uart ? s->console_uart->baud_rate : 0);
 
     sx1262_send_msg(s, ENGINE_RADIO_STATS, sb, sizeof(sb));
 }
@@ -651,6 +668,8 @@ static const VMStateDescription vmstate_sx1262 = {
 
 static Property sx1262_properties[] = {
     DEFINE_PROP_STRING("bridge", SX1262State, bridge),
+    DEFINE_PROP_LINK("console-uart", SX1262State, console_uart,
+                     TYPE_ESP32_UART, ESP32UARTState *),
     DEFINE_PROP_END_OF_LIST(),
 };
 

@@ -243,6 +243,12 @@ static void esp32_clk_update(void* opaque, int n, int level)
     qdev_prop_set_int32(DEVICE(&s->frc_timer), "apb_freq", apb_clk_freq);
     qdev_prop_set_int32(DEVICE(&s->timg[0]), "apb_freq", apb_clk_freq);
     qdev_prop_set_int32(DEVICE(&s->timg[1]), "apb_freq", apb_clk_freq);
+    /* And the UARTs, whose divider is against this clock: a rate computed
+     * from the wrong one is wrong by the ratio between them, which on this
+     * part is a factor of two. */
+    for (int i = 0; i < ESP32_UART_COUNT; ++i) {
+        qdev_prop_set_uint32(DEVICE(&s->uart[i]), "apb_freq", apb_clk_freq);
+    }
     clock_update_hz(s->cpu[0].clock, cpu_clk_freq );
     clock_update_hz(s->cpu[1].clock, cpu_clk_freq );
 }
@@ -792,6 +798,12 @@ static void esp32_machine_init_radio(Esp32SocState *ss, const char *bridge,
 
     qdev_prop_set_string(radio, "bridge", bridge);
     qdev_prop_set_uint8(radio, "cs", cs);
+    /* UART0, so the engine can be told what rate the console has been set to.
+     * See the same line in esp32s3.c: which port a board's Serial is on is the
+     * firmware's choice, so the machine reports the UART and whoever knows the
+     * board decides whether that is the console at all. */
+    object_property_set_link(OBJECT(radio), "console-uart",
+                             OBJECT(&ss->uart[0]), &error_abort);
     qdev_realize_and_unref(radio, spi_bus, &error_fatal);
 
     /* NSS and BUSY are ordinary GPIOs on these boards, not the SPI
