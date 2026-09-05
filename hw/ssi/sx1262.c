@@ -579,6 +579,8 @@ static void sx1262_realize(SSIPeripheral *dev, Error **errp)
     s->chip = s->lib.create();
     if (!s->chip) {
         error_setg(errp, "sx1262: the chip model would not start");
+        g_module_close(s->lib.module);
+        s->lib.module = NULL;
         return;
     }
     /* The seed for this node's receiver noise, which is where its firmware gets
