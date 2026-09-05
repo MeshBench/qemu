@@ -4,6 +4,8 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND="noninteractive"
 
+"$(dirname "${BASH_SOURCE[0]}")/debian-archive.sh"
+
 apt-get update -y -q
 apt-get install -y -q --no-install-recommends \
     build-essential \

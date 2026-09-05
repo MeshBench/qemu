@@ -4,6 +4,8 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND="noninteractive"
 
+"$(dirname "${BASH_SOURCE[0]}")/debian-archive.sh"
+
 dpkg --add-architecture arm64
 
 apt-get update -y -q
