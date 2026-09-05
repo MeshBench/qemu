@@ -158,8 +158,7 @@ static void uart_write(void *opaque, hwaddr addr,
                           FIELD_EX32(s->reg[R_UART_CLKDIV], UART_CLKDIV, CLKDIV_FRAG);
         unsigned baud_rate = 115200;
         if (clkdiv != 0) {
-            /* FIXME: this should depend on the APB frequency */
-            baud_rate = (unsigned) ((40000000ULL << 4) / clkdiv);
+            baud_rate = (unsigned) (((uint64_t) s->apb_freq << 4) / clkdiv);
         }
         s->baud_rate = baud_rate;
         break;
@@ -372,6 +371,26 @@ static void esp32_uart_init(Object *obj)
 
 static Property esp32_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", ESP32UARTState, chr),
+    /* The clock this UART's divider is measured against, which is not the same
+     * on the two parts and is why the rate used to be computed from a constant
+     * with a FIXME beside it.
+     *
+     * Eighty megahertz, measured rather than assumed: a Heltec V3 running
+     * MeshCore, which asks for 115200, settles at a divider this clock turns
+     * into 115201 - and into 57600 against the forty that used to be hard
+     * coded here, which is where the FIXME beside it came from.
+     *
+     * Take the reading after the firmware has settled. The ROM bootloader and
+     * the application need not agree, so an early one catches a rate nothing
+     * is using any more: this was read at 230400 once, from a divider the
+     * bootloader had left behind.
+     *
+     * The classic ESP32 clocks its UART from the APB and that machine sets the
+     * real figure here on every clock change, so it is right there whether the
+     * PLL is up or not. What is still assumed is the S3, whose UART names its
+     * own source in a register this model does not read: a firmware that picks
+     * the crystal instead would be reported at twice its rate. */
+    DEFINE_PROP_UINT32("apb_freq", ESP32UARTState, apb_freq, 80000000),
     DEFINE_PROP_END_OF_LIST(),
 };
 

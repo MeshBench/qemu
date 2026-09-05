@@ -88,6 +88,10 @@ typedef struct ESPUARTState {
     bool throttle_rx;
     bool rxfifo_tout;
     unsigned baud_rate;
+    /* What the divider is measured against. The rate a firmware asks for is a
+     * divider of this, so assuming it is assuming the answer: fixed at 40 MHz,
+     * every rate came back at half its truth on a part whose APB runs at 80. */
+    uint32_t apb_freq;
 
     Fifo8 rx_fifo;
     Fifo8 tx_fifo;
