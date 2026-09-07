@@ -24,6 +24,12 @@ on:
     # branch it became; naming the old one meant this stopped running on pushes
     # without anybody noticing it had.
     branches: [meshbench-main]
+  # And on the pull requests that propose changing it. Without this the checks
+  # below ran only after a merge, so a branch proposing a change to the machine
+  # was reviewed with nothing green or red beside it - which is how a property
+  # that aborts every ESP32 board at hand-over reached the default branch.
+  pull_request:
+    branches: [meshbench-main]
   workflow_dispatch:
 
 # Read-only, deliberately. Every write this repository has any business making
@@ -71,6 +77,12 @@ jobs:
           test -f hw/ssi/sx1262.c || { echo "sx1262 device missing" >&2; exit 1; }
           ./build/qemu-system-xtensa -machine help | grep -qi esp32
           echo "sx1262 device present, esp32 machine available"
+
+      # A property the machine sets at runtime must not be a static qdev one.
+      # Being one aborted the emulator at hand-over on every ESP32 board and
+      # every platform, days after a green build published it.
+      - name: The clock handler's writes are still accepted
+        run: python3 .github/workflows/scripts/check-clock-properties.py
 
       - name: Package
         run: |
