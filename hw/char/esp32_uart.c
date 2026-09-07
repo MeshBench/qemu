@@ -22,6 +22,7 @@
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/qdev-properties-system.h"
+#include "qapi/visitor.h"
 #include "hw/char/esp32_uart.h"
 #include "trace.h"
 
@@ -346,6 +347,27 @@ static void esp32_uart_realize(DeviceState *dev, Error **errp)
 }
 
 
+/* apb_freq is set while the machine runs, so it cannot be a static property.
+ *
+ * It was DEFINE_PROP_UINT32 to begin with, and qdev guards those after
+ * realize: the classic ESP32's clock handler runs when the second-stage
+ * bootloader switches to the PLL, and setting it there aborted the emulator
+ * outright -
+ *
+ *   Attempt to set property 'apb_freq' on anonymous device
+ *   (type 'esp_soc.uart') after it was realized
+ *
+ * which took every ESP32 board down at hand-over, on all three platforms. A
+ * dynamic object property has no such guard, which is why the two other
+ * consumers of this clock - esp32_frc_timer and esp32_timg - have always
+ * registered theirs this way. This follows them. */
+static void esp32_uart_set_apb_freq(Object *obj, Visitor *v, const char *name,
+                                    void *opaque, Error **errp)
+{
+    ESP32UARTState *s = ESP32_UART(obj);
+    visit_type_uint32(v, name, &s->apb_freq, errp);
+}
+
 static void esp32_uart_init(Object *obj)
 {
     ESP32UARTState *s = ESP32_UART(obj);
@@ -365,12 +387,7 @@ static void esp32_uart_init(Object *obj)
     fifo8_create(&s->tx_fifo, UART_FIFO_LENGTH);
     fifo8_create(&s->rx_fifo, UART_FIFO_LENGTH);
     timer_init_ns(&s->throttle_timer, QEMU_CLOCK_VIRTUAL, uart_throttle_timer_cb, s);
-    timer_init_ns(&s->rx_timeout_timer, QEMU_CLOCK_VIRTUAL, uart_rx_timeout_timer_cb, s);
-}
 
-
-static Property esp32_uart_properties[] = {
-    DEFINE_PROP_CHR("chardev", ESP32UARTState, chr),
     /* The clock this UART's divider is measured against, which is not the same
      * on the two parts and is why the rate used to be computed from a constant
      * with a FIXME beside it.
@@ -390,7 +407,18 @@ static Property esp32_uart_properties[] = {
      * PLL is up or not. What is still assumed is the S3, whose UART names its
      * own source in a register this model does not read: a firmware that picks
      * the crystal instead would be reported at twice its rate. */
-    DEFINE_PROP_UINT32("apb_freq", ESP32UARTState, apb_freq, 80000000),
+    s->apb_freq = 80000000;
+    object_property_add(obj, "apb_freq", "uint32",
+                        NULL,
+                        esp32_uart_set_apb_freq,
+                        NULL,
+                        obj);
+    timer_init_ns(&s->rx_timeout_timer, QEMU_CLOCK_VIRTUAL, uart_rx_timeout_timer_cb, s);
+}
+
+
+static Property esp32_uart_properties[] = {
+    DEFINE_PROP_CHR("chardev", ESP32UARTState, chr),
     DEFINE_PROP_END_OF_LIST(),
 };
 

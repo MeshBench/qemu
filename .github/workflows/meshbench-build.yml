@@ -72,6 +72,12 @@ jobs:
           ./build/qemu-system-xtensa -machine help | grep -qi esp32
           echo "sx1262 device present, esp32 machine available"
 
+      # A property the machine sets at runtime must not be a static qdev one.
+      # Being one aborted the emulator at hand-over on every ESP32 board and
+      # every platform, days after a green build published it.
+      - name: The clock handler's writes are still accepted
+        run: python3 .github/workflows/scripts/check-clock-properties.py
+
       - name: Package
         run: |
           set -e

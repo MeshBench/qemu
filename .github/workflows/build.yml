@@ -193,6 +193,16 @@ jobs:
           install/qemu/bin/qemu-system-xtensa -device help 2>&1 | grep -i sx1262 \
             || echo "sx1262 is compiled in but not listed by -device help"
 
+      # The one runtime check a cross-compiled matrix can make, and the one
+      # that matters: a release shipped an emulator that aborted the moment
+      # the bootloader switched to the PLL, on all three platforms at once,
+      # and every job here was green. This is that abort, in a second.
+      - name: The clock handler's writes are still accepted (${{ matrix.target }} @ ${{ matrix.platform }})
+        if : ${{ matrix.platform == 'x86_64-linux-gnu' && matrix.target == 'xtensa-softmmu' }}
+        run: |
+          python3 .github/workflows/scripts/check-clock-properties.py \
+            install/qemu/bin/qemu-system-xtensa
+
       - name: Package (${{ matrix.target }} @ ${{ matrix.platform }})
         env:
           VERSION: ${{ needs.Vars.outputs.VERSION }}
