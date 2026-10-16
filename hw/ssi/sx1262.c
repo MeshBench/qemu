@@ -124,6 +124,10 @@ typedef struct {
     void (*tick)(vsx_chip *chip, uint64_t now_ms);
     void (*set_channel_busy)(vsx_chip *chip, int busy);
     void (*deliver_frame)(vsx_chip *chip, const uint8_t *frame, size_t len);
+    /* NULL on a chip model older than 1.3.2, which cannot be told a frame
+     * failed: the node then hears nothing for one, as it always did. */
+    void (*deliver_frame_failed)(vsx_chip *chip, const uint8_t *frame,
+                                 size_t len, uint8_t failure);
     void (*transmit_finished)(vsx_chip *chip);
     size_t (*take_tx)(vsx_chip *chip, uint8_t *dst, size_t cap);
     void (*set_fem_enabled)(vsx_chip *chip, int enabled);
@@ -147,6 +151,7 @@ enum {
     ENGINE_TX_DONE      = 0x04, /* engine to node: your waveform has ended */
     ENGINE_CHANNEL_BUSY = 0x08, /* engine to node: somebody else is on the air */
     ENGINE_RADIO_STATS  = 0x09, /* node to engine: what the chip has been asked */
+    ENGINE_FRAME_FAILED = 0x0A, /* engine to node: a frame locked onto and lost */
 };
 
 /* The stats record, whose layout the engine reads on length. */
@@ -232,6 +237,11 @@ static bool sx1262_bind(SX1262Lib *lib, const char *path, Error **errp)
             lib->module = NULL;
             return false;
         }
+    }
+
+    if (!g_module_symbol(lib->module, "vsx_deliver_frame_failed",
+                         (gpointer *)&lib->deliver_frame_failed)) {
+        lib->deliver_frame_failed = NULL;
     }
 
     lib->abi_version(&major, &minor);
@@ -443,11 +453,19 @@ static void sx1262_engine_readable(void *opaque)
 
     switch (hdr[0]) {
     case ENGINE_FRAME:
-        /* A packet the channel delivered. Only frames that passed CRC arrive
-         * here, exactly as on hardware: everything else was recorded and
-         * withheld. */
+        /* A packet the channel delivered, and passed its CRC. A frame that
+         * locked and failed comes as ENGINE_FRAME_FAILED; one that never
+         * locked does not come at all, exactly as on hardware. */
         if (n > 0) {
             s->lib.deliver_frame(s->chip, payload, n);
+        }
+        break;
+
+    case ENGINE_FRAME_FAILED:
+        /* A frame the receiver locked onto and lost; the first byte is where.
+         * The chip raises HeaderErr, or RxDone beside CrcErr, as the part does. */
+        if (n >= 1 && s->lib.deliver_frame_failed) {
+            s->lib.deliver_frame_failed(s->chip, payload + 1, n - 1, payload[0]);
         }
         break;
 
