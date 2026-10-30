@@ -122,9 +122,10 @@ jobs:
             run_configure: "./.github/workflows/scripts/configure-cross-win64.sh"
 
           - platform: aarch64-apple-darwin
-            # The org's own M4: faster than hosted, no queue. Safe because
-            # every event that reaches this workflow needs write access.
-            runs_on: [self-hosted, macos-m4]
+            # GitHub's hosted Apple-silicon runner. The repository is public,
+            # so it costs nothing, and it is there when the org's M4 is not:
+            # a release waiting on one machine being switched on does not ship.
+            runs_on: macos-15
             shell: bash -e {0}
             run_prerequisites: "./.github/workflows/scripts/prerequisites-macos.sh"
             run_configure: "./.github/workflows/scripts/configure-macos.sh"
