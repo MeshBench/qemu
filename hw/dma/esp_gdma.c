@@ -285,8 +285,13 @@ bool esp_gdma_get_channel_periph(ESPGdmaState *s, GdmaPeripheral periph, int dir
          * descriptor on. The AES path never noticed because it arms one
          * channel; an SPI display driver that uses a different channel got a
          * descriptor error and its transfer never completed. */
+        /* START is not at the same offset for IN and OUT: on an IN link the
+         * OUT link's START bit is STOP, so testing it there never found the
+         * channel AES or SPI receive had armed. */
+        const uint32_t start = (dir == ESP_GDMA_IN_IDX) ? R_GDMA_IN_LINK_START_MASK
+                                                        : R_GDMA_OUT_LINK_START_MASK;
         if ( FIELD_EX32(s->ch_conf[dir][i].peripheral, GDMA_PERI_SEL, PERI_SEL) == periph &&
-             FIELD_EX32(s->ch_conf[dir][i].link, GDMA_OUT_LINK, START)) {
+             (s->ch_conf[dir][i].link & start)) {
 
             *chan = i;
             return true;
